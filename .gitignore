@@ -1,0 +1,24 @@
+# Trọng số mô hình (tải tự động khi chạy, quá lớn cho GitHub)
+*.pt
+*.pth
+*.onnx
+*_ncnn_model/
+*_openvino_model/
+EcoClass-Vision/weights/
+
+# Dữ liệu, video, kết quả chạy
+EcoClass-Vision/data/
+EcoClass-Vision/runs/
+EcoClass-Vision/datasets/
+*.mp4
+*.db
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+.env
+
+# Office tạm
+~$*
