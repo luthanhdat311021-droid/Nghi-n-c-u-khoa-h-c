@@ -211,19 +211,43 @@ class LightGroupDetector(DeviceDetector):
     def measure(self, frame, scene, ts):
         hsv = crop(scene.hsv, self.roi)
         H, W = hsv.shape[:2]
-        m = (hsv[..., 2] >= self.p.get("v_min", 240)) & (hsv[..., 1] <= self.p.get("s_max", 60))
+        # Chỉ ngưỡng theo độ sáng; độ bão hoà màu được xét theo trung bình cả vùng ở dưới
+        # (lọc từng điểm ảnh sẽ cắt vụn ô cửa sổ thành mảnh nhỏ trông giống đèn).
+        m = (hsv[..., 2] >= self.p.get("v_min", 240)) & (hsv[..., 1] <= self.p.get("s_max", 255))
         pm = self._person_mask(scene)
         if pm is not None:
             m &= ~pm
         m = m.astype(np.uint8)
         m = cv2.morphologyEx(m, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
         m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, np.ones((7, 7), np.uint8))
-        n, _, stats, _ = cv2.connectedComponentsWithStats(m, connectivity=8)
+        n, lab, stats, _ = cv2.connectedComponentsWithStats(m, connectivity=8)
         area = H * W
         rx1, ry1, rx2, ry2 = self.roi
+        sat = hsv[..., 1].astype(np.float32)
+        # Trung bình S của từng thành phần (vector hoá).
+        sums = np.bincount(lab.ravel(), weights=sat.ravel(), minlength=n)
+        cnts = np.bincount(lab.ravel(), minlength=n).astype(np.float32)
+        mean_s = sums / np.maximum(cnts, 1)
+        min_nb_area = self.p.get("neighbor_min_area", 30)
         blobs = []
         for i in range(1, n):
             x, y, bw, bh, a = stats[i]
+            # Ánh sáng đèn huỳnh quang/LED gần như không màu (S ~2–3); ô cửa sổ nhìn ra trời có ánh xanh.
+            if mean_s[i] > self.p.get("s_mean_max", 8):
+                continue
+            # Cửa sổ = lưới nhiều ô sáng sát nhau, ngăn bởi khung mảnh; máng đèn đứng riêng lẻ.
+            gap = self.p.get("neighbor_gap", 0.3) * min(bw, bh) + 4
+            nb = 0
+            for j in range(1, n):
+                if j == i or stats[j][4] < min_nb_area:
+                    continue
+                X, Y, Wj, Hj, _ = stats[j]
+                gx = max(0, max(x, X) - min(x + bw, X + Wj))
+                gy = max(0, max(y, Y) - min(y + bh, Y + Hj))
+                if gx < gap and gy < gap:
+                    nb += 1
+            if nb > self.p.get("max_neighbors", 0):
+                continue
             if not (self.p.get("min_area", 0.002) * area <= a <= self.p.get("max_area", 0.12) * area):
                 continue
             if a / float(bw * bh) < self.p.get("fill_min", 0.4):

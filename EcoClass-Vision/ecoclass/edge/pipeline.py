@@ -133,11 +133,17 @@ class EdgePipeline:
         cv2.putText(img, stamp, (10, h - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
         return img
 
-    def render_debug(self, frame, out: dict) -> np.ndarray:
-        """Ảnh gỡ lỗi (người luôn được làm mờ)."""
+    def render_debug(self, frame, out: dict, scale: float = 1.0) -> np.ndarray:
+        """Ảnh gỡ lỗi (người luôn được làm mờ). ``scale`` > 1: phóng to + làm nét trước khi vẽ
+        để chữ/khung sắc nét khi webcam chỉ cho độ phân giải thấp."""
         pr = out["person"]
         # Có mặt nạ phân đoạn → chỉ làm mờ đúng hình người, phần nền giữ nét.
         img = blur_mask(frame, pr.mask) if pr.mask is not None else blur_boxes(frame, pr.boxes)
+        if scale != 1.0:
+            img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+            img = cv2.addWeighted(img, 1.5, cv2.GaussianBlur(img, (0, 0), 2), -0.5, 0)   # unsharp mask
+            from .person import PersonResult
+            pr = PersonResult(pr.n_raw, pr.n, [tuple(v * scale for v in b) for b in pr.boxes], pr.confs, pr.ids)
         h, w = img.shape[:2]
         sc = max(0.5, w / 1280)                       # cỡ chữ/nét theo độ phân giải
         th = max(1, int(round(2 * sc)))
@@ -150,6 +156,7 @@ class EdgePipeline:
         for b, i in zip(pr.boxes, pr.ids):
             cv2.rectangle(img, (int(b[0]), int(b[1])), (int(b[2]), int(b[3])), (255, 200, 0), th, aa)
             text(f"id{i}", (int(b[0]) + 4, int(b[1]) + int(22 * sc)), (255, 200, 0), 0.5)
+        free_row = 0                                  # nhãn của thiết bị không có khung → xếp dòng ở góc trái
         for k, det in self.detectors.items():
             r = out["readings"][k]
             c = COLORS.get(r.state, (160, 160, 160))
@@ -160,8 +167,12 @@ class EdgePipeline:
             for roi in boxes:
                 x1, y1, x2, y2 = roi_to_px(roi, w, h)
                 cv2.rectangle(img, (x1, y1), (x2, y2), c, th, aa)
-            x1, y1 = roi_to_px(boxes[0], w, h)[:2] if boxes else (8, int(80 * sc))
-            text(label, (x1 + 2, max(int(70 * sc), y1 - 6)), c)
+            if boxes:
+                x1, y1 = roi_to_px(boxes[0], w, h)[:2]
+                text(label, (x1 + 2, max(int(70 * sc), y1 - 6)), c)
+            else:
+                free_row += 1
+                text(label, (10, int((44 + 30 * free_row) * sc)), c)
         s = out["snapshot"]
         bar = int(44 * sc)
         cv2.rectangle(img, (0, 0), (w, bar), (30, 30, 30), -1)
@@ -217,7 +228,7 @@ def run(
                 print(f"[{datetime.fromtimestamp(ev.ts):%H:%M:%S}] {ev.type:13s} {ev.state_from} -> {ev.state_to}"
                       f" N={ev.people} on={ev.devices_on}{extra}")
             if show or save_video:
-                dbg = pipe.render_debug(fr.image, out)
+                dbg = pipe.render_debug(fr.image, out, scale=cfg.display_scale)
                 if save_video:
                     if writer is None:
                         Path(save_video).parent.mkdir(parents=True, exist_ok=True)

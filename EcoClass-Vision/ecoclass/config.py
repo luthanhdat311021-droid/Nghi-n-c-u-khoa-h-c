@@ -67,6 +67,7 @@ class RoomConfig:
     fps: float = 5.0
     capture_width: int | None = None     # yêu cầu độ phân giải webcam (vd 1280x720)
     capture_height: int | None = None
+    display_scale: float = 1.0           # phóng to cửa sổ gỡ lỗi (2.0 cho webcam 640x480)
     timetable: str | None = None
     tariff_vnd_per_kwh: float = 2500.0
     person: PersonConfig = field(default_factory=PersonConfig)
@@ -103,6 +104,7 @@ def load_room_config(path: str | Path) -> RoomConfig:
         fps=float(raw.get("fps", 5.0)),
         capture_width=raw.get("capture_width"),
         capture_height=raw.get("capture_height"),
+        display_scale=float(raw.get("display_scale", 1.0)),
         timetable=raw.get("timetable"),
         tariff_vnd_per_kwh=float(raw.get("tariff_vnd_per_kwh", 2500.0)),
         person=PersonConfig(**raw.get("person", {})),
