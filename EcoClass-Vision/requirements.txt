@@ -1,0 +1,26 @@
+# PyTorch có CUDA (máy có GPU NVIDIA) — cài trước:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+# Raspberry Pi 5: pip install torch torchvision (bản CPU) hoặc chỉ dùng mô hình NCNN/ONNX.
+ultralytics>=8.3
+opencv-python
+numpy
+pyyaml
+lap
+onnx
+onnxruntime
+requests
+paho-mqtt>=2.0
+# Máy chủ
+fastapi
+uvicorn[standard]
+sqlalchemy>=2.0
+python-multipart
+# psycopg[binary]        # khi dùng PostgreSQL
+# Huấn luyện / đánh giá
+scikit-learn
+pandas
+pytest
+# YOLO-World (Auto-ROI) cần CLIP:
+#   pip install https://github.com/ultralytics/CLIP/archive/refs/heads/main.zip
+# Florence-2 (xác minh tầng 2, tuỳ chọn):
+#   pip install transformers timm einops

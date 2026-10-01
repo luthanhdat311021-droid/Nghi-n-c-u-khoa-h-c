@@ -1,0 +1,51 @@
+# Chạy thử bằng webcam laptop hướng lên trần có đèn huỳnh quang và quạt trần.
+# Camera cầm tay/xê dịch được:
+#   - Đèn: "lights_auto" tự dò mọi đèn đang sáng trên toàn khung → không phụ thuộc vị trí camera.
+#   - Quạt: "fan_auto" tự tìm vùng cánh quạt đang quay (dao động độ sáng bền vững theo thời gian).
+#   - Người: YOLO11n-seg → mặt nạ người chính xác (loại khỏi vùng đo + làm mờ đúng hình người).
+# 15 fps, 1280x720 trên GPU (FP16). Các tham số đếm theo khung đã nhân ~3 so với cấu hình 5 fps.
+# Te = 15 s để thử nhanh.
+room_id: WEBCAM-TEST
+source: "0"
+fps: 15
+capture_width: 1280
+capture_height: 720
+tariff_vnd_per_kwh: 2500
+
+person:
+  model: yolo11n-seg.pt
+  imgsz: 640
+  device: "0"
+  half: true
+  conf_occupied: 0.25
+  conf_empty: 0.40
+  hold_seconds: 2
+  window: 15
+
+fsm:
+  empty_seconds_to_pending: 2
+  te_seconds: 15
+  te_no_class_seconds: 15
+  off_confirm_seconds: 3
+
+publisher:
+  mode: http
+  http_url: http://127.0.0.1:8000
+  heartbeat_seconds: 2
+
+devices:
+  - id: lights
+    type: lights_auto
+    roi: [0.0, 0.0, 1.0, 1.0]
+    power_w: 72
+    on_frames: 6
+    off_frames: 15                  # 1 s
+    params: {per_light_w: 72, v_min: 240, s_max: 60, min_area: 0.002, max_area: 0.12, fill_min: 0.4}
+  - id: fans
+    type: fan_auto
+    roi: [0.0, 0.0, 1.0, 1.0]
+    power_w: 60
+    on_frames: 6
+    off_frames: 24                  # quạt tắt quay chậm dần → chờ ~1,6 s mới kết luận TẮT
+    params: {per_fan_w: 60, window: 12, min_frames: 8, tstd_pix: 4.0, heat_alpha: 0.1, heat_on: 0.5,
+             min_area: 0.004, max_aspect: 3.0}

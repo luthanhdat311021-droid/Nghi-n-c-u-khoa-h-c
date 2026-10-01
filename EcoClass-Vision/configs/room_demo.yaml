@@ -1,0 +1,53 @@
+# Cấu hình phòng cho video demo tổng hợp (scripts/make_demo_video.py).
+# Te rút ngắn còn 20 s để demo nhanh; khi triển khai thật dùng 300 s (5 phút).
+room_id: A1-101
+source: ../data/demo/demo_classroom.mp4     # rtsp://user:pass@ip:554/stream | 0 (webcam) | file video
+fps: 5
+timetable: timetable.csv
+tariff_vnd_per_kwh: 2500
+
+person:
+  model: yolo11n.pt          # thay bằng runs/person/yolo11n_classroom/weights/best.pt sau khi tinh chỉnh
+  imgsz: 640
+  tracker: bytetrack.yaml
+  conf_occupied: 0.25
+  conf_empty: 0.40
+  hold_seconds: 3
+  window: 5
+
+fsm:
+  empty_seconds_to_pending: 2
+  te_seconds: 20
+  te_no_class_seconds: 20
+  off_confirm_seconds: 3
+
+publisher:
+  mode: http                 # mqtt khi có Mosquitto; stdout để gỡ lỗi
+  http_url: http://127.0.0.1:8000
+  mqtt_host: 127.0.0.1
+  heartbeat_seconds: 2
+
+devices:
+  - id: light_1
+    type: light
+    roi: [0.2266, 0.0167, 0.3828, 0.0764]
+    ref_roi: [0.2344, 0.2500, 0.3750, 0.3200]
+    power_w: 72              # máng đèn 2 x 36 W
+    params: {on_ratio: 1.3}
+  - id: light_2
+    type: light
+    roi: [0.6172, 0.0167, 0.7734, 0.0764]
+    ref_roi: [0.6172, 0.4000, 0.6900, 0.4600]
+    power_w: 72
+    params: {on_ratio: 1.3}
+  - id: fan_1
+    type: fan
+    roi: [0.4219, 0.0972, 0.5781, 0.2361]
+    power_w: 60
+    params: {flow_threshold: 0.6}
+  - id: projector_1
+    type: projector
+    roi: [0.7109, 0.2014, 0.9453, 0.4514]
+    ref_roi: [0.7109, 0.4750, 0.9453, 0.5100]
+    power_w: 250
+    params: {on_ratio: 1.25, std_on: 25}

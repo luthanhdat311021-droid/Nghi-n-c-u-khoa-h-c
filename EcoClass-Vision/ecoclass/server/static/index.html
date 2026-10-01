@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EcoClass-Vision</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #f5f6f8; --card: #ffffff; --text: #1d2330; --muted: #667085; --line: #e3e6eb;
+    --occ: #2f6fd6; --pend: #d99a00; --alert: #d6312f; --ok: #1f9d55; --unk: #98a2b3;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #12151b; --card: #1b2029; --text: #e7eaf0; --muted: #98a2b3; --line: #2a303b; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, "Segoe UI", Roboto, sans-serif; }
+  header { padding: 16px 20px; border-bottom: 1px solid var(--line); display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  header h1 { margin: 0; font-size: 20px; }
+  header span { color: var(--muted); }
+  main { padding: 16px 20px; max-width: 1280px; margin: 0 auto; display: grid; gap: 16px; }
+  h2 { font-size: 15px; margin: 0 0 10px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+  .kpi b { display: block; font-size: 24px; font-variant-numeric: tabular-nums; }
+  .kpi span { color: var(--muted); }
+  .rooms { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
+  .room { border-left: 5px solid var(--unk); }
+  .room.OCCUPIED { border-left-color: var(--occ); }
+  .room.EMPTY_PENDING { border-left-color: var(--pend); }
+  .room.ALERT { border-left-color: var(--alert); background: color-mix(in srgb, var(--alert) 8%, var(--card)); }
+  .room.EMPTY_SAFE, .room.RESOLVED { border-left-color: var(--ok); }
+  .room .name { font-weight: 600; font-size: 16px; }
+  .room .st { font-weight: 600; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .chip { padding: 2px 8px; border-radius: 999px; font-size: 12px; border: 1px solid var(--line); }
+  .chip.ON { background: color-mix(in srgb, var(--alert) 15%, transparent); border-color: var(--alert); }
+  .chip.OFF { color: var(--muted); }
+  .muted { color: var(--muted); font-size: 12px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 800px) { .grid2 { grid-template-columns: 1fr; } }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 7px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  img.thumb { width: 120px; border-radius: 6px; cursor: zoom-in; display: block; }
+  .badge { padding: 1px 7px; border-radius: 6px; font-size: 12px; }
+  .badge.open { background: var(--alert); color: #fff; }
+  .badge.closed { background: var(--ok); color: #fff; }
+  .badge.rejected { background: var(--unk); color: #fff; }
+  .badge.verifying { background: var(--pend); color: #fff; }
+  button { font: inherit; padding: 3px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--card); color: var(--text); cursor: pointer; }
+  dialog { border: none; border-radius: 10px; padding: 0; max-width: 92vw; }
+  dialog img { display: block; max-width: 92vw; max-height: 86vh; }
+  .chart-box { position: relative; height: 220px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>EcoClass-Vision</h1>
+  <span>Giám sát phòng học bị bỏ quên thiết bị điện</span>
+  <span id="updated" style="margin-left:auto"></span>
+</header>
+<main>
+  <section class="kpis" id="kpis"></section>
+  <section class="card">
+    <h2>Trạng thái phòng học</h2>
+    <div class="rooms" id="rooms"><span class="muted">Chưa có dữ liệu từ thiết bị biên.</span></div>
+  </section>
+  <section class="grid2">
+    <div class="card"><h2>Điện năng lãng phí theo khung giờ (kWh, 7 ngày)</h2><div class="chart-box"><canvas id="hourChart"></canvas></div></div>
+    <div class="card"><h2>Điện năng lãng phí theo phòng (kWh, 7 ngày)</h2><div class="chart-box"><canvas id="roomChart"></canvas></div></div>
+  </section>
+  <section class="card">
+    <h2>Lịch sử cảnh báo</h2>
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th>Ảnh bằng chứng</th><th>Phòng</th><th>Bắt đầu</th><th>Thiết bị bật</th><th>Trạng thái</th>
+        <th class="num">Thời gian (phút)</th><th class="num">Lãng phí (Wh)</th><th class="num">Chi phí (đ)</th><th>Xác minh VLM</th><th></th></tr></thead>
+      <tbody id="alerts"></tbody>
+    </table>
+    </div>
+  </section>
+</main>
+<dialog id="dlg" onclick="this.close()"><img id="dlgimg" alt="Ảnh bằng chứng"></dialog>
+<script>
+const STATUS_VI = {open: "Đang mở", closed: "Đã đóng", rejected: "Cảnh báo giả", verifying: "Đang xác minh"};
+const REASON_VI = {devices_off: "thiết bị đã tắt", person_returned: "có người quay lại"};
+const fmt = (x, d = 0) => Number(x || 0).toLocaleString("vi-VN", {maximumFractionDigits: d, minimumFractionDigits: d});
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+let hourChart, roomChart;
+
+function css(v) { return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+
+async function load() {
+  try {
+    const [rooms, alerts, stats] = await Promise.all(
+      ["/api/rooms", "/api/alerts?limit=50", "/api/stats?days=7"].map(u => fetch(u).then(r => r.json())));
+    renderKpis(rooms, stats);
+    renderRooms(rooms);
+    renderAlerts(alerts);
+    renderCharts(stats);
+    document.getElementById("updated").textContent = "Cập nhật " + new Date().toLocaleTimeString("vi-VN");
+  } catch (e) {
+    document.getElementById("updated").textContent = "Mất kết nối máy chủ";
+  }
+}
+
+function renderKpis(rooms, st) {
+  const alerting = rooms.filter(r => r.state === "ALERT").length;
+  const items = [
+    [rooms.length, "phòng đang giám sát"],
+    [alerting, "phòng đang bỏ quên thiết bị"],
+    [st.total_alerts, "cảnh báo (7 ngày)"],
+    [fmt(st.total_kwh, 3) + " kWh", "điện lãng phí (7 ngày)"],
+    [fmt(st.total_cost_vnd) + " đ", "chi phí ước tính"],
+    [st.rejected_by_vlm, "cảnh báo giả bị VLM loại"],
+  ];
+  document.getElementById("kpis").innerHTML = items.map(([v, l]) => `<div class="card kpi"><b>${v}</b><span>${l}</span></div>`).join("");
+}
+
+function renderRooms(rooms) {
+  if (!rooms.length) return;
+  document.getElementById("rooms").innerHTML = rooms.map(r => {
+    const chips = Object.entries(r.devices || {}).map(([k, v]) => `<span class="chip ${v}">${esc(k)}: ${v === "ON" ? "BẬT" : v === "OFF" ? "tắt" : "?"}</span>`).join("");
+    const extra = r.state === "ALERT" || r.state === "EMPTY_PENDING"
+      ? `<div class="muted">Vắng ${fmt(r.empty_seconds / 60, 1)} phút · lãng phí ${fmt(r.waste_wh_current, 1)} Wh</div>` : "";
+    return `<div class="card room ${r.state}">
+      <div class="name">${esc(r.room_id)}</div>
+      <div class="st">${esc(r.state_vi)}${r.dark ? " · phòng tối" : ""}</div>
+      <div class="muted">${r.people} người · ${r.last_seen ? new Date(r.last_seen).toLocaleTimeString("vi-VN") : ""}</div>
+      ${extra}<div class="chips">${chips}</div></div>`;
+  }).join("");
+}
+
+function renderAlerts(alerts) {
+  document.getElementById("alerts").innerHTML = alerts.map(a => `<tr>
+    <td>${a.has_evidence ? `<img class="thumb" loading="lazy" src="/api/alerts/${encodeURIComponent(a.alert_id)}/evidence" onclick="zoom(this.src)" alt="bằng chứng">` : "—"}</td>
+    <td>${esc(a.room_id)}<div class="muted">${a.in_class ? "Trong giờ: " + esc(a.course || "") : "Ngoài giờ học"}</div></td>
+    <td>${new Date(a.started).toLocaleString("vi-VN")}</td>
+    <td>${esc(a.devices_on.join(", "))}</td>
+    <td><span class="badge ${a.status}">${STATUS_VI[a.status] || a.status}</span>
+        <div class="muted">${esc(REASON_VI[a.close_reason] || "")}${a.acknowledged_by ? " · đã xác nhận" : ""}</div></td>
+    <td class="num">${fmt(a.duration_min, 1)}</td>
+    <td class="num">${fmt(a.waste_wh, 1)}</td>
+    <td class="num">${fmt(a.cost_vnd)}</td>
+    <td class="muted" style="max-width:240px">${a.verified === null ? "không dùng" : a.verified ? "✔ phòng trống" : "✘ còn người"}${a.verify_note ? "<br>" + esc(a.verify_note.slice(0, 120)) : ""}</td>
+    <td>${a.status === "open" && !a.acknowledged_by ? `<button onclick="ack('${esc(a.alert_id)}')">Xác nhận</button>` : ""}</td>
+  </tr>`).join("") || `<tr><td colspan="10" class="muted">Chưa có cảnh báo.</td></tr>`;
+}
+
+function renderCharts(st) {
+  if (!window.Chart) return;
+  const color = css("--alert"), grid = css("--line"), text = css("--muted");
+  const opts = {responsive: true, maintainAspectRatio: false, animation: false, plugins: {legend: {display: false}},
+    scales: {x: {grid: {display: false}, ticks: {color: text}}, y: {grid: {color: grid}, ticks: {color: text}, beginAtZero: true}}};
+  const hours = [...Array(24).keys()].map(h => h + "h");
+  if (!hourChart) hourChart = new Chart(document.getElementById("hourChart"), {type: "bar", data: {labels: hours, datasets: [{data: st.by_hour_kwh, backgroundColor: color, borderRadius: 3}]}, options: opts});
+  else { hourChart.data.datasets[0].data = st.by_hour_kwh; hourChart.update(); }
+  const labels = st.by_room.map(r => r.room_id), data = st.by_room.map(r => r.kwh);
+  const hopts = {...opts, indexAxis: "y", scales: {
+    y: {grid: {display: false}, ticks: {color: text}},
+    x: {grid: {color: grid}, ticks: {color: text}, beginAtZero: true}}};
+  if (!roomChart) roomChart = new Chart(document.getElementById("roomChart"), {type: "bar", data: {labels, datasets: [{data, backgroundColor: color, borderRadius: 3}]}, options: hopts});
+  else { roomChart.data.labels = labels; roomChart.data.datasets[0].data = data; roomChart.update(); }
+}
+
+function zoom(src) { document.getElementById("dlgimg").src = src; document.getElementById("dlg").showModal(); }
+async function ack(id) { await fetch(`/api/alerts/${encodeURIComponent(id)}/ack?who=dashboard`, {method: "POST"}); load(); }
+
+load();
+setInterval(load, 5000);
+</script>
+</body>
+</html>
