@@ -8,15 +8,16 @@
 # Te = 15 s để thử nhanh.
 room_id: WEBCAM-TEST
 source: "0"
-fps: 20
+fps: 30
 capture_width: 640
 capture_height: 480
 display_scale: 2.0
 tariff_vnd_per_kwh: 2500
 
 person:
-  model: yolo11n-seg.pt
-  imgsz: 640
+  model: yolo11n.onnx
+  imgsz: 320
+  detect_stride: 2
   device: "0"
   conf_occupied: 0.25
   conf_empty: 0.40

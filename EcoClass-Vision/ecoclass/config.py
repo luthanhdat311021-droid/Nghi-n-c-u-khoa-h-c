@@ -26,6 +26,7 @@ class PersonConfig:
     window: int = 5                # cửa sổ trượt làm trơn N(t)
     device: str | None = None      # "cpu", "0", ... (None = tự chọn)
     half: bool = False             # FP16 trên GPU NVIDIA → nhanh hơn
+    detect_stride: int = 1         # nhảy khung suy luận YOLO (1 = mọi khung, 2 = 2 khung 1 lần)
 
 
 @dataclass

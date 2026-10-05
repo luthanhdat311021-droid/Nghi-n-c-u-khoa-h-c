@@ -206,7 +206,11 @@ def run(
                          width=cfg.capture_width, height=cfg.capture_height)
     title = f"EcoClass-Vision {cfg.room_id}"
     if show:
-        cv2.namedWindow(title, cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)   # cửa sổ kéo giãn được
+        try:
+            cv2.namedWindow(title, cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)   # cửa sổ kéo giãn được
+        except cv2.error as e:
+            print(f"[warning] Không thể mở cửa sổ hiển thị GUI OpenCV: {e}")
+            show = False
     frames = iter(source)
     first = next(frames)
     if select_roi:
@@ -236,9 +240,12 @@ def run(
                                                  (dbg.shape[1], dbg.shape[0]))
                     writer.write(dbg)
                 if show:
-                    cv2.imshow(title, dbg)
-                    if cv2.waitKey(1) & 0xFF in (27, ord("q")):
-                        break
+                    try:
+                        cv2.imshow(title, dbg)
+                        if cv2.waitKey(1) & 0xFF in (27, ord("q")):
+                            break
+                    except cv2.error:
+                        show = False
             n += 1
             if max_frames and n >= max_frames:
                 break
