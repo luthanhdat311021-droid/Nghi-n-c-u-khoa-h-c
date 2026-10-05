@@ -40,11 +40,19 @@ class PersonCounter:
         self.window: deque[int] = deque(maxlen=max(1, cfg.window))
         self.confirmed: set[int] = set()
         self.last_seen: dict[int, float] = {}
-        # Lớp "person": mô hình COCO gốc là 0; mô hình tinh chỉnh trên dữ liệu phòng học cũng đặt 0.
-        names = self.model.names
-        self.person_cls = next((k for k, v in names.items() if v == "person"), PERSON_CLASS)
+        names = getattr(self.model, "names", {0: "person"})
+        self.person_cls = next((k for k, v in names.items() if v == "person"), PERSON_CLASS) if isinstance(names, dict) else PERSON_CLASS
+        self.detect_stride = getattr(cfg, "detect_stride", 1)
+        self._frame_count = 0
+        self._last_result: PersonResult | None = None
 
     def update(self, frame: np.ndarray, ts: float, occupied: bool) -> PersonResult:
+        if self.detect_stride > 1 and self._last_result is not None:
+            if self._frame_count % self.detect_stride != 0:
+                self._frame_count += 1
+                return self._last_result
+        self._frame_count += 1
+
         thr = self.cfg.conf_occupied if occupied else self.cfg.conf_empty
         kw = dict(imgsz=self.cfg.imgsz, classes=[self.person_cls], verbose=False)
         if self.cfg.device is not None:
@@ -94,4 +102,6 @@ class PersonCounter:
 
         self.window.append(n_raw)
         n = int(round(float(np.median(self.window))))
-        return PersonResult(n_raw=n_raw, n=n, boxes=boxes, confs=confs, ids=ids, mask=mask)
+        res = PersonResult(n_raw=n_raw, n=n, boxes=boxes, confs=confs, ids=ids, mask=mask)
+        self._last_result = res
+        return res

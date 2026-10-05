@@ -2,13 +2,14 @@
 # Te rút ngắn còn 20 s để demo nhanh; khi triển khai thật dùng 300 s (5 phút).
 room_id: A1-101
 source: ../data/demo/demo_classroom.mp4     # rtsp://user:pass@ip:554/stream | 0 (webcam) | file video
-fps: 5
+fps: 30
 timetable: timetable.csv
 tariff_vnd_per_kwh: 2500
 
 person:
-  model: yolo11n.pt          # thay bằng runs/person/yolo11n_classroom/weights/best.pt sau khi tinh chỉnh
-  imgsz: 640
+  model: yolo11n_openvino_model
+  imgsz: 320
+  detect_stride: 3
   tracker: bytetrack.yaml
   conf_occupied: 0.25
   conf_empty: 0.40
