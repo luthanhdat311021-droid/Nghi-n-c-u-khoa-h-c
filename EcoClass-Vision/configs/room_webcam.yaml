@@ -12,6 +12,9 @@ fps: 20
 capture_width: 640
 capture_height: 480
 display_scale: 2.0
+device_model: ../models/devices_yolo11n.pt   # YOLO11n (fan, window) huấn luyện trên Open Images
+device_conf: 0.45
+flip: horizontal              # webcam laptop cho ảnh kiểu gương → lật lại cho thuận chiều
 tariff_vnd_per_kwh: 2500
 
 person:
@@ -41,8 +44,11 @@ devices:
     power_w: 72
     on_frames: 8
     off_frames: 20                  # 1 s
-    params: {per_light_w: 72, v_min: 240, min_area: 0.002, max_area: 0.12, fill_min: 0.4,
-             s_mean_max: 12, max_neighbors: 0}     # loại ô cửa sổ (ánh xanh, xếp lưới) và tường cháy sáng
+    # Nhận mọi kiểu đèn (tuýp, tròn âm trần, panel): phần lớn cháy trắng (lõi >= 60%, kể cả quầng sáng),
+    # không màu, đứng riêng lẻ, diện tích <= 6% khung.
+    # Loại: tường cháy sáng (diện tích lớn), ô cửa sổ (ánh xanh, xếp lưới, box YOLO "window").
+    params: {per_light_w: 20, v_min: 240, core_v: 250, core_min: 0.6, min_area: 0.0008, max_area: 0.06,
+             fill_min: 0.4, s_mean_max: 12, max_neighbors: 0}
   - id: fans
     type: fan_auto
     roi: [0.0, 0.0, 1.0, 1.0]

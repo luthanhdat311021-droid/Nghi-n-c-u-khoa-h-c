@@ -53,6 +53,15 @@ class EdgePipeline:
             d.classifier = cfg.resolve(d.classifier)
         self.detectors = {d.id: build_detector(d) for d in cfg.devices}
         self.motion = CameraMotion() if any(d.params.get("track") for d in cfg.devices) else None
+        self.locator = None
+        model = cfg.resolve(cfg.device_model)
+        if model:
+            if Path(model).exists():
+                from .device_yolo import DeviceLocator
+                self.locator = DeviceLocator(model, conf=cfg.device_conf, device=cfg.person.device)
+                print(f"[edge] bộ phát hiện thiết bị: {model} {self.locator.names}")
+            else:
+                print(f"[edge] chưa có {model} → dùng luật dò toàn khung")
         self.timetable = Timetable.load(cfg.resolve(cfg.timetable))
         fsm_cfg = cfg.fsm
         if not temporal:
@@ -78,7 +87,8 @@ class EdgePipeline:
     def process(self, frame: np.ndarray, ts: float) -> dict:
         occupied = self.fsm.state == RoomState.OCCUPIED
         pr = self.counter.update(frame, ts, occupied=occupied)
-        scene = make_scene(frame, pr.boxes, pr.mask, motion=self.motion)
+        dev_boxes = self.locator(frame) if self.locator is not None else None
+        scene = make_scene(frame, pr.boxes, pr.mask, motion=self.motion, device_boxes=dev_boxes)
         readings = {k: det.update(frame, scene, ts) for k, det in self.detectors.items()}
         states = {k: r.state for k, r in readings.items()}
         for k, det in self.detectors.items():
@@ -203,7 +213,7 @@ def run(
     select_roi: list[str] | None = None,
 ) -> list[dict]:
     source = FrameSource(cfg.resolve(cfg.source), fps=cfg.fps, t0=t0, realtime=realtime,
-                         width=cfg.capture_width, height=cfg.capture_height)
+                         width=cfg.capture_width, height=cfg.capture_height, flip=cfg.flip)
     title = f"EcoClass-Vision {cfg.room_id}"
     if show:
         cv2.namedWindow(title, cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)   # cửa sổ kéo giãn được

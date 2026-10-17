@@ -46,10 +46,11 @@ class SceneInfo:
     cam_offset: tuple[float, float] = (0.0, 0.0)   # dịch tích luỹ của camera (pixel) so với lúc cấu hình ROI
     cam_moving: bool = False
     cam_reliable: bool = True          # False: khung không còn khớp tham chiếu (camera quay đi hướng khác)
+    device_boxes: dict | None = None   # {"light": [...], "fan": [...]} từ DeviceLocator (YOLO), toạ độ chuẩn hoá
 
 
 def make_scene(frame: np.ndarray, person_boxes: list, person_mask: np.ndarray | None = None,
-               motion=None, dark_v: float = 25.0) -> SceneInfo:
+               motion=None, dark_v: float = 25.0, device_boxes: dict | None = None) -> SceneInfo:
     """``motion``: CameraMotion (tuỳ chọn) — cập nhật độ dịch camera cho các ROI có track."""
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -60,7 +61,20 @@ def make_scene(frame: np.ndarray, person_boxes: list, person_mask: np.ndarray | 
         ox, oy, moving = motion.update(gray, person_mask)
         reliable = motion.reliable
     return SceneInfo(hsv=hsv, gray=gray, mean_v=mean_v, dark=mean_v < dark_v, person_boxes=person_boxes,
-                     person_mask=person_mask, cam_offset=(ox, oy), cam_moving=moving, cam_reliable=reliable)
+                     person_mask=person_mask, cam_offset=(ox, oy), cam_moving=moving, cam_reliable=reliable,
+                     device_boxes=device_boxes)
+
+
+def _overlap(a, b) -> float:
+    """Tỉ lệ diện tích box a (chuẩn hoá) nằm trong box b."""
+    iw = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+    ih = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    area = max(1e-9, (a[2] - a[0]) * (a[3] - a[1]))
+    return iw * ih / area
+
+
+def _box_px(b, w, h):
+    return int(b[0] * w), int(b[1] * h), max(int(b[2] * w), int(b[0] * w) + 1), max(int(b[3] * h), int(b[1] * h) + 1)
 
 
 def shift_roi(roi: list[float], dx: float, dy: float) -> list[float] | None:
@@ -209,6 +223,8 @@ class LightGroupDetector(DeviceDetector):
         self.dynamic_power: float | None = None
 
     def measure(self, frame, scene, ts):
+        if scene.device_boxes is not None and "light" in scene.device_boxes:
+            return self._measure_in_boxes(scene)
         hsv = crop(scene.hsv, self.roi)
         H, W = hsv.shape[:2]
         # Chỉ ngưỡng theo độ sáng; độ bão hoà màu được xét theo trung bình cả vùng ở dưới
@@ -228,6 +244,8 @@ class LightGroupDetector(DeviceDetector):
         sums = np.bincount(lab.ravel(), weights=sat.ravel(), minlength=n)
         cnts = np.bincount(lab.ravel(), minlength=n).astype(np.float32)
         mean_s = sums / np.maximum(cnts, 1)
+        core = (hsv[..., 2] >= self.p.get("core_v", 250)).astype(np.float32)
+        core_frac = np.bincount(lab.ravel(), weights=core.ravel(), minlength=n) / np.maximum(cnts, 1)
         min_nb_area = self.p.get("neighbor_min_area", 30)
         blobs = []
         for i in range(1, n):
@@ -252,17 +270,39 @@ class LightGroupDetector(DeviceDetector):
                 continue
             if a / float(bw * bh) < self.p.get("fill_min", 0.4):
                 continue
-            # Máng đèn huỳnh quang có dạng thuôn dài; mảng tường cháy sáng do tự phơi sáng thường gần vuông.
-            # Đặt min_aspect: 0 nếu phòng dùng đèn panel vuông/tròn.
-            if max(bw, bh) / float(min(bw, bh)) < self.p.get("min_aspect", 1.8):
+            # Mọi loại đèn (tuýp, tròn âm trần, panel, bóng tròn) đều là NGUỒN SÁNG: lõi gần như toàn bộ
+            # cháy trắng (V>=250). Tường/cửa sổ cháy sáng do tự phơi sáng chỉ "gần trắng" (tỉ lệ thấp hơn).
+            # Không lọc theo hình dạng → nhận cả đèn tròn/vuông.
+            if core_frac[i] < self.p.get("core_min", 0.88):
+                continue
+            if max(bw, bh) / float(min(bw, bh)) < self.p.get("min_aspect", 0.0):
                 continue
             blobs.append([round(rx1 + (rx2 - rx1) * x / W, 4), round(ry1 + (ry2 - ry1) * y / H, 4),
                           round(rx1 + (rx2 - rx1) * (x + bw) / W, 4), round(ry1 + (ry2 - ry1) * (y + bh) / H, 4)])
         if scene.dark:
             blobs = []
+        # Có bộ phát hiện YOLO lớp "window": vùng sáng nằm trong cửa sổ không phải đèn.
+        windows = (scene.device_boxes or {}).get("window", [])
+        if windows:
+            blobs = [b for b in blobs if max((_overlap(b, wb) for wb in windows), default=0.0)
+                     < self.p.get("window_overlap_max", 0.3)]
         self.blobs = blobs
         self.dynamic_power = len(blobs) * float(self.p.get("per_light_w", 72))
-        return (ON if blobs else OFF), float(len(blobs)), {"count": len(blobs)}
+        return (ON if blobs else OFF), float(len(blobs)), {"count": len(blobs), "windows": len(windows)}
+
+    def _measure_in_boxes(self, scene):
+        """Có bộ phát hiện YOLO: chỉ xét các máng đèn nó tìm thấy; đèn BẬT nếu đủ điểm ảnh bão hoà."""
+        H, W = scene.hsv.shape[:2]
+        v = scene.hsv[..., 2]
+        blobs = []
+        for b in scene.device_boxes["light"]:
+            x1, y1, x2, y2 = _box_px(b, W, H)
+            if (v[y1:y2, x1:x2] >= self.p.get("v_min", 240)).mean() >= self.p.get("box_bright_frac", 0.25):
+                blobs.append(b)
+        self.blobs = [] if scene.dark else blobs
+        self.dynamic_power = len(self.blobs) * float(self.p.get("per_light_w", 72))
+        return (ON if self.blobs else OFF), float(len(self.blobs)), \
+            {"count": len(self.blobs), "fixtures": len(scene.device_boxes["light"])}
 
 
 class FanDetector(DeviceDetector):
@@ -415,6 +455,23 @@ class FanAutoDetector(DeviceDetector):
         a = self.p.get("heat_alpha", 0.3)
         self.heat = act if self.heat is None else (1 - a) * self.heat + a * act
         m = (self.heat >= self.p.get("heat_on", 0.5)).astype(np.uint8)
+
+        if scene.device_boxes is not None and "fan" in scene.device_boxes:
+            # Có YOLO: chỉ xét dao động bên trong box quạt → người/cửa cử động ngoài box không gây báo sai.
+            mh, mw = m.shape[:2]
+            blobs = []
+            for bx in scene.device_boxes["fan"]:
+                x1, y1, x2, y2 = _box_px(bx, mw, mh)
+                ok = valid[y1:y2, x1:x2]
+                if ok.sum() < 10:
+                    continue
+                if m[y1:y2, x1:x2][ok].mean() >= self.p.get("box_active_frac", 0.08):
+                    blobs.append(bx)
+            self.blobs = blobs
+            self.dynamic_power = len(blobs) * float(self.p.get("per_fan_w", 60))
+            return (ON if blobs else OFF), float(len(blobs)), \
+                {"count": len(blobs), "fans_seen": len(scene.device_boxes["fan"]), "active_frac": round(active, 3)}
+
         m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
         m = cv2.morphologyEx(m, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
 

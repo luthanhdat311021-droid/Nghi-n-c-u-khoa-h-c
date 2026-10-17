@@ -1,0 +1,51 @@
+# Dùng camera điện thoại qua Wi-Fi (điện thoại và laptop cùng mạng).
+#   Android — app "IP Webcam":   http://<IP-điện-thoại>:8080/video
+#   Android/iOS — app "DroidCam": http://<IP-điện-thoại>:4747/video
+# Thay <IP-điện-thoại> bằng địa chỉ app hiển thị, hoặc truyền --source khi chạy:
+#   python scripts/run_edge.py --config configs/room_phone.yaml --source http://192.168.1.23:8080/video --show
+# Nên đặt điện thoại cố định (giá đỡ/tựa vào vật) để bộ dò quạt đo được dao động cánh quạt.
+room_id: PHONE-TEST
+source: http://192.168.1.23:8080/video
+fps: 15
+display_scale: 1.0
+device_model: ../models/devices_yolo11n.pt
+device_conf: 0.45
+tariff_vnd_per_kwh: 2500
+
+person:
+  model: yolo11n-seg.pt
+  imgsz: 640
+  device: "0"
+  conf_occupied: 0.25
+  conf_empty: 0.40
+  hold_seconds: 2
+  window: 15
+
+fsm:
+  empty_seconds_to_pending: 2
+  te_seconds: 15
+  te_no_class_seconds: 15
+  off_confirm_seconds: 3
+
+publisher:
+  mode: http
+  http_url: http://127.0.0.1:8000
+  heartbeat_seconds: 2
+
+devices:
+  - id: lights
+    type: lights_auto
+    roi: [0.0, 0.0, 1.0, 1.0]
+    power_w: 72
+    on_frames: 6
+    off_frames: 15
+    params: {per_light_w: 20, v_min: 240, core_v: 250, core_min: 0.6, min_area: 0.0008, max_area: 0.06,
+             fill_min: 0.4, s_mean_max: 12, max_neighbors: 0}
+  - id: fans
+    type: fan_auto
+    roi: [0.0, 0.0, 1.0, 1.0]
+    power_w: 60
+    on_frames: 6
+    off_frames: 24
+    params: {per_fan_w: 60, window: 12, min_frames: 8, tstd_pix: 4.0, heat_alpha: 0.1, heat_on: 0.5,
+             min_area: 0.004, max_aspect: 3.0}

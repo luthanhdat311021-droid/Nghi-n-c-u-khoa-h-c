@@ -27,8 +27,10 @@ class Frame:
 
 class FrameSource:
     def __init__(self, source: str, fps: float = 5.0, t0: float | None = None, realtime: bool = False,
-                 width: int | None = None, height: int | None = None):
+                 width: int | None = None, height: int | None = None, flip: str | None = None):
         self.source = source
+        # Lật ảnh: "horizontal" (bỏ hiệu ứng gương), "vertical" (camera lắp ngược), "both".
+        self.flip_code = {"horizontal": 1, "vertical": 0, "both": -1}.get(flip or "", None)
         self.width, self.height = width, height
         self.fps = fps
         self.is_file = Path(source).exists() and not source.isdigit()
@@ -67,7 +69,10 @@ class FrameSource:
         return cap
 
     def __iter__(self) -> Iterator[Frame]:
-        return self._iter_file() if self.is_file else self._iter_live()
+        it = self._iter_file() if self.is_file else self._iter_live()
+        if self.flip_code is None:
+            return it
+        return (Frame(cv2.flip(f.image, self.flip_code), f.ts, f.index) for f in it)
 
     def _iter_file(self) -> Iterator[Frame]:
         cap = self._open()

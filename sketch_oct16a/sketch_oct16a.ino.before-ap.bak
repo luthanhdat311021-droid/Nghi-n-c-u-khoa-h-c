@@ -1,0 +1,58 @@
+#include <WiFi.h>
+#include <WebServer.h>
+#include "DHT.h"
+
+// --- THAY TÊN VÀ MẬT KHẨU WI-FI NHÀ BẠN VÀO ĐÂY ---
+const char* ssid = "C204";      
+const char* password = "Tdmu#2026";   
+
+#define DHTPIN 4       // Chân DATA (S) của DHT11 nối vào D4 (GPIO4) trên ESP32
+#define DHTTYPE DHT11  // Khai báo loại cảm biến DHT11 thực tế
+
+DHT dht(DHTPIN, DHTTYPE);
+WebServer server(80);
+
+void handleRoot() {
+  float hum = dht.readHumidity();        // Đọc độ ẩm (%)
+  float temp = dht.readTemperature();   // Đọc nhiệt độ (°C)
+
+  String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1'>";
+  html += "<style>body{font-family:Arial; text-align:center; margin-top:50px; background:#f0f2f5;}";
+  html += ".card{background:white; padding:30px; border-radius:15px; display:inline-block; box-shadow:0 4px 8px rgba(0,0,0,0.1);}";
+  html += "h1{color:#007bff;} .val{font-size:1.8em; font-weight:bold; color:#333;}</style>";
+  html += "<script>setInterval(function(){location.reload();}, 3000);</script></head><body>";
+  html += "<div class='card'><h1>TRẠM ĐO THỜI TIẾT IOT</h1>";
+  
+  if (isnan(temp) || isnan(hum)) {
+    html += "<p style='color:red;'>Lỗi: Không đọc được dữ liệu từ cảm biến DHT11!</p>";
+  } else {
+    html += "<p>🌡️ Nhiệt độ phòng: <span class='val'>" + String(temp, 1) + " °C</span></p>";
+    html += "<p>💧 Độ ẩm không khí: <span class='val'>" + String(hum, 1) + " %</span></p>";
+  }
+  
+  html += "</div></body></html>";
+  server.send(200, "text/html", html);
+}
+
+void setup() {
+  Serial.begin(115200);
+  dht.begin();
+
+  WiFi.begin(ssid, password);
+  Serial.print("Đang kết nối Wi-Fi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  
+  Serial.println("\nĐã kết nối Wi-Fi thành công!");
+  Serial.print("Địa chỉ IP trang Web: ");
+  Serial.println(WiFi.localIP());
+
+  server.on("/", handleRoot);
+  server.begin();
+}
+
+void loop() {
+  server.handleClient();
+}
