@@ -27,8 +27,10 @@ class Frame:
 
 class FrameSource:
     def __init__(self, source: str, fps: float = 5.0, t0: float | None = None, realtime: bool = False,
-                 width: int | None = None, height: int | None = None, flip: str | None = None):
+                 width: int | None = None, height: int | None = None, flip: str | None = None,
+                 loop: bool = False):
         self.source = source
+        self.loop = loop                 # file video: phát lặp lại (thời gian tiếp tục tăng) — để chạy thử/demo
         # Lật ảnh: "horizontal" (bỏ hiệu ứng gương), "vertical" (camera lắp ngược), "both".
         self.flip_code = {"horizontal": 1, "vertical": 0, "both": -1}.get(flip or "", None)
         self.width, self.height = width, height
@@ -82,6 +84,10 @@ class FrameSource:
         try:
             while True:
                 ok = cap.grab()
+                if not ok and self.loop and i > 0:
+                    cap.release()
+                    cap = self._open()
+                    ok = cap.grab()
                 if not ok:
                     break
                 if i % step == 0:

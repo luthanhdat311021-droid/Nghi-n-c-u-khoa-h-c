@@ -56,6 +56,34 @@ python scripts/evaluate_events.py --events runs/demo_events.jsonl runs/ablation_
 6. **Vận hành**: đặt `publisher.mode: mqtt`, chạy Mosquitto. Biến môi trường máy chủ (`.env`): `DATABASE_URL`, `MQTT_HOST`,
    `ECOCLASS_VLM=florence-2-base`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_IDS`, `ECOCLASS_API_KEY`.
 
+## Huấn luyện từ video phòng học thật (2 phòng, 16 video)
+
+Video đặt tại `datasets/classroom_videos/room{1,2}/`, nhãn theo video (đèn/quạt/người) ở `configs/classroom_labels.csv`.
+Đèn dùng bộ phân lớp MobileNetV3 trên ảnh màu toàn khung; quạt dùng **ảnh chồng thời gian** (3 khung xám cách
+nhau 0,1 s, căn chỉnh bù rung camera, xoá vùng người bằng mặt nạ YOLO11-seg — `ecoclass/edge/tstack.py`).
+
+```bash
+python scripts/build_scene_cls.py                                  # chia train/val theo video (4 video val)
+python scripts/train_scene_cls.py --task light --out runs/scene_try
+python scripts/train_scene_cls.py --task fan   --out runs/scene_try
+python scripts/build_scene_cls.py --out datasets/scene_cls_all --val none   # bản cuối: toàn bộ video
+python scripts/train_scene_cls.py --task light --data datasets/scene_cls_all  # → models/light_scene_mnv3.onnx
+python scripts/train_scene_cls.py --task fan   --data datasets/scene_cls_all  # → models/fan_scene_mnv3.onnx
+python scripts/eval_videos.py --config configs/room_classroom.yaml           # đánh giá đầu–cuối
+python scripts/eval_videos.py --config configs/room_classroom_rules.yaml     # so sánh: luật thủ công
+```
+
+Kết quả (độ chính xác mức khung):
+
+| | Luật thủ công (16 video) | Bộ phân lớp, khung val giữ riêng | Đầu–cuối trên 4 video val |
+|---|---|---|---|
+| Đèn | 0,487 | 1,000 (2 cách chia) | 1,000 |
+| Quạt | 0,397 | 0,993 / 0,996 (2 cách chia) | 1,000 |
+| Người | 1,000 | — | 1,000 |
+
+Lưu ý: bộ phân lớp quạt cần pipeline chạy ≥ 10 fps (`cls_dt: 0.1`); dữ liệu mới chỉ có 2 phòng, phòng khác
+nên quay thêm video (đủ tổ hợp đèn/quạt/người) rồi chạy lại các lệnh trên.
+
 ## Kiểm thử
 
 ```bash

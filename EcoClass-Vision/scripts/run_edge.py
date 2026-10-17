@@ -32,6 +32,7 @@ def main() -> None:
     ap.add_argument("--start", help="thời điểm bắt đầu của file video, ISO (vd 2026-10-01T16:30:00) — dùng cho thời khoá biểu")
     ap.add_argument("--realtime", action="store_true", help="phát file video theo thời gian thực")
     ap.add_argument("--max-frames", type=int)
+    ap.add_argument("--loop", action="store_true", help="phát lặp file video (chạy thử cảnh báo với video ngắn)")
     ap.add_argument("--select-roi", nargs="+", metavar="DEVICE_ID",
                     help="kéo chuột chọn ROI cho các thiết bị này trên khung đầu tiên")
     ap.add_argument("--no-track", action="store_true", help="ablation: bỏ ByteTrack")
@@ -48,7 +49,7 @@ def main() -> None:
 
     events = run(cfg, pub, show=a.show, save_video=a.save_video, use_tracker=not a.no_track,
                  temporal=not a.no_temporal, frame_log=a.frame_log, t0=t0, realtime=a.realtime,
-                 max_frames=a.max_frames, select_roi=a.select_roi)
+                 max_frames=a.max_frames, select_roi=a.select_roi, loop=a.loop)
     if a.events_out:
         Path(a.events_out).parent.mkdir(parents=True, exist_ok=True)
         with open(a.events_out, "w", encoding="utf-8") as f:

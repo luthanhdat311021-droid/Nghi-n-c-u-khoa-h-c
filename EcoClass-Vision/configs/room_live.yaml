@@ -1,0 +1,49 @@
+# Vận hành thật: camera phòng học → cảnh báo lên máy chủ khi KHÔNG CÓ NGƯỜI liên tục 2 phút
+# mà đèn hoặc quạt vẫn BẬT (dùng bộ phân lớp đèn/quạt học từ video phòng học, xem room_classroom.yaml).
+#
+#   Cửa sổ 1 (máy chủ):  uvicorn ecoclass.server.app:app --host 0.0.0.0 --port 8000   → http://127.0.0.1:8000
+#   Cửa sổ 2 (camera):   python scripts/run_edge.py --config configs/room_live.yaml --source http://<IP-điện-thoại>:8080/video --show
+#   Đổi tên phòng hiển thị trên dashboard: sửa room_id (mỗi camera/phòng một file cấu hình).
+#   Máy chủ ở máy khác: đổi publisher.http_url thành http://<IP-máy-chủ>:8000
+room_id: PHONG-1
+source: http://192.168.1.23:8080/video     # IP Webcam (Android) / DroidCam / rtsp://... / "0" = webcam
+fps: 10                                    # bộ phân lớp quạt cần >= 10 fps
+tariff_vnd_per_kwh: 2500
+
+person:
+  model: yolo11n-seg.pt
+  imgsz: 640
+  device: "0"
+  conf_occupied: 0.25
+  conf_empty: 0.40
+  hold_seconds: 3
+  window: 10
+
+fsm:
+  empty_seconds_to_pending: 3      # N=0 liên tục 3 s → bắt đầu đếm "phòng trống"
+  te_seconds: 120                  # trống liên tục 2 phút mà còn đèn/quạt BẬT → CẢNH BÁO
+  te_no_class_seconds: 120         # (giữ 2 phút cả ngoài giờ học; có thể rút ngắn khi dùng thời khoá biểu)
+  off_confirm_seconds: 5           # thiết bị TẮT ổn định 5 s → đóng cảnh báo ("đã xử lý")
+
+publisher:
+  mode: http
+  http_url: http://127.0.0.1:8000
+  heartbeat_seconds: 2
+
+devices:
+  - id: lights
+    type: light
+    roi: [0.0, 0.0, 1.0, 1.0]
+    classifier: ../models/light_scene_mnv3.onnx
+    power_w: 72
+    on_frames: 5
+    off_frames: 10
+    params: {cls_size: [384, 224]}
+  - id: fans
+    type: fan
+    roi: [0.0, 0.0, 1.0, 1.0]
+    classifier: ../models/fan_scene_mnv3.onnx
+    power_w: 60
+    on_frames: 5
+    off_frames: 10
+    params: {cls_input: tstack, cls_size: [384, 224], cls_dt: 0.1}

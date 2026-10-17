@@ -1,0 +1,47 @@
+# Chạy thử bộ phân lớp đèn/quạt (học từ video phòng học) bằng webcam laptop — không gửi lên máy chủ.
+#   python scripts/run_edge.py --config configs/room_webcam_cls.yaml --show      (q / Esc để thoát)
+# Webcam này: 640x480@30fps (720p chỉ ~8 fps, không đủ cho bộ phân lớp quạt cần >= 10 fps).
+room_id: WEBCAM-CLS
+source: "0"
+fps: 10
+capture_width: 640
+capture_height: 480
+display_scale: 2.0
+flip: horizontal
+tariff_vnd_per_kwh: 2500
+
+person:
+  model: yolo11n-seg.pt
+  imgsz: 640
+  device: "0"
+  conf_occupied: 0.25
+  conf_empty: 0.40
+  hold_seconds: 3
+  window: 10
+
+fsm:
+  empty_seconds_to_pending: 3
+  te_seconds: 120
+  te_no_class_seconds: 120
+  off_confirm_seconds: 5
+
+publisher:
+  mode: none
+
+devices:
+  - id: lights
+    type: light
+    roi: [0.0, 0.0, 1.0, 1.0]
+    classifier: ../models/light_scene_mnv3.onnx
+    power_w: 72
+    on_frames: 5
+    off_frames: 10
+    params: {cls_size: [384, 224]}
+  - id: fans
+    type: fan
+    roi: [0.0, 0.0, 1.0, 1.0]
+    classifier: ../models/fan_scene_mnv3.onnx
+    power_w: 60
+    on_frames: 5
+    off_frames: 10
+    params: {cls_input: tstack, cls_size: [384, 224], cls_dt: 0.1}

@@ -101,7 +101,10 @@ class DeviceDetector:
         self.roi = list(cfg.roi)                                  # ROI hiện tại (có thể đã dịch)
         self.ref_roi = list(cfg.ref_roi) if cfg.ref_roi else None
         self.camera_moved = False
-        self.classifier = ROIClassifier(cfg.classifier) if cfg.classifier else None
+        self.classifier = ROIClassifier(cfg.classifier, size=self.p.get("cls_size", 224)) if cfg.classifier else None
+        # "roi": ảnh màu của ROI; "tstack": ảnh chồng thời gian toàn khung (tstack.py) — cho quạt.
+        self.cls_input = self.p.get("cls_input", "roi")
+        self._hist: deque[tuple[float, np.ndarray]] = deque(maxlen=64)
         self.track = bool(self.p.get("track"))
 
     # Các lớp con cài đặt measure(): trả về (raw_state, score, features)
@@ -124,8 +127,11 @@ class DeviceDetector:
 
         occ = self.occlusion(scene, w, h)
         if self.classifier is not None and not scene.dark:
-            p_on = self.classifier.prob_on(crop(frame, self.roi))
-            raw, score, feats = (ON if p_on >= self.p.get("cls_threshold", 0.5) else OFF), p_on, {"p_on": p_on}
+            x = self._tstack_input(scene, ts) if self.cls_input == "tstack" else crop(frame, self.roi)
+            if x is None:
+                return DeviceReading(self.state, UNKNOWN, 0.0, {"warming_up": True})
+            p_on = self.classifier.prob_on(x)
+            raw, score, feats = (ON if p_on >= self.p.get("cls_threshold", 0.5) else OFF), p_on, {"p_on": round(p_on, 3)}
         else:
             raw, score, feats = self.measure(frame, scene, ts)
         feats["occlusion"] = round(occ, 2)
@@ -134,6 +140,22 @@ class DeviceDetector:
             return DeviceReading(self.state, UNKNOWN, float(score), {**feats, "occluded": True})
         self._apply_hysteresis(raw)
         return DeviceReading(self.state, raw, float(score), feats)
+
+    def _tstack_input(self, scene: SceneInfo, ts: float) -> np.ndarray | None:
+        """Ảnh chồng thời gian [t-2dt, t-dt, t] từ lịch sử khung; None khi chưa đủ lịch sử.
+        Cần pipeline chạy >= 1/dt fps (mặc định dt = 0,1 s → 10 fps) để khớp dữ liệu huấn luyện."""
+        from .tstack import make_tstack, to_gray_small
+        size = tuple(self.classifier.size)
+        g0 = to_gray_small(scene.gray, size)
+        self._hist.append((ts, g0))
+        dt = float(self.p.get("cls_dt", 0.1))
+        past = list(self._hist)[:-1]
+        if len(past) < 2:
+            return None
+        pick = [min(past, key=lambda h: abs(h[0] - (ts - k * dt))) for k in (2, 1)]
+        if pick[0][0] == pick[1][0] or abs(pick[1][0] - (ts - dt)) > dt:
+            return None
+        return make_tstack(pick[0][1], pick[1][1], g0, scene.person_mask)
 
     def _appearance(self, gray: np.ndarray, roi: list[float]) -> float | None:
         """Tương quan chuẩn hoá giữa ROI hiện tại và ROI ở khung tham chiếu (ảnh làm mờ mạnh,
@@ -547,8 +569,9 @@ class ROIClassifier:
     MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
     STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 
-    def __init__(self, path: str, size: int = 224):
-        self.size = size
+    def __init__(self, path: str, size: int | list[int] = 224):
+        # size: cạnh ảnh vuông, hoặc [rộng, cao] (bộ phân lớp toàn khung: [384, 224])
+        self.size = (size, size) if isinstance(size, int) else (int(size[0]), int(size[1]))
         self.path = path
         if path.endswith(".onnx"):
             import onnxruntime as ort
@@ -561,7 +584,7 @@ class ROIClassifier:
             self.sess = None
 
     def preprocess(self, roi_bgr: np.ndarray) -> np.ndarray:
-        img = cv2.resize(roi_bgr, (self.size, self.size), interpolation=cv2.INTER_AREA)
+        img = cv2.resize(roi_bgr, self.size, interpolation=cv2.INTER_AREA)
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
         img = (img - self.MEAN) / self.STD
         return img.transpose(2, 0, 1)[None].astype(np.float32)

@@ -1,0 +1,47 @@
+# Phòng học thật — trạng thái đèn/quạt do bộ phân lớp MobileNetV3 học từ video 2 phòng học
+# (datasets/classroom_videos, nhãn configs/classroom_labels.csv; xem scripts/build_scene_cls.py, train_scene_cls.py).
+#   - Đèn: ảnh màu toàn khung.
+#   - Quạt: ảnh chồng thời gian 3 khung cách nhau 0,1 s (đã bù rung camera, xoá vùng người) → cần fps >= 10.
+# So sánh với luật thủ công: configs/room_classroom_rules.yaml.
+#   python scripts/eval_videos.py --config configs/room_classroom.yaml
+#   python scripts/run_edge.py --config configs/room_classroom.yaml --source <rtsp/http/file> --show
+room_id: CLASSROOM
+source: datasets/classroom_videos/room1/r1_154.mp4
+fps: 10
+tariff_vnd_per_kwh: 2500
+
+person:
+  model: yolo11n-seg.pt
+  imgsz: 640
+  device: "0"
+  conf_occupied: 0.25
+  conf_empty: 0.40
+  hold_seconds: 2
+  window: 7
+
+fsm:
+  empty_seconds_to_pending: 2
+  te_seconds: 15
+  te_no_class_seconds: 15
+  off_confirm_seconds: 3
+
+publisher:
+  mode: none
+
+devices:
+  - id: lights
+    type: light
+    roi: [0.0, 0.0, 1.0, 1.0]
+    classifier: ../models/light_scene_mnv3.onnx
+    power_w: 72
+    on_frames: 3
+    off_frames: 5
+    params: {cls_size: [384, 224]}
+  - id: fans
+    type: fan
+    roi: [0.0, 0.0, 1.0, 1.0]
+    classifier: ../models/fan_scene_mnv3.onnx
+    power_w: 60
+    on_frames: 3
+    off_frames: 5
+    params: {cls_input: tstack, cls_size: [384, 224], cls_dt: 0.1}

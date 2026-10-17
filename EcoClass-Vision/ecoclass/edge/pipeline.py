@@ -211,9 +211,10 @@ def run(
     realtime: bool = False,
     max_frames: int | None = None,
     select_roi: list[str] | None = None,
+    loop: bool = False,
 ) -> list[dict]:
     source = FrameSource(cfg.resolve(cfg.source), fps=cfg.fps, t0=t0, realtime=realtime,
-                         width=cfg.capture_width, height=cfg.capture_height, flip=cfg.flip)
+                         width=cfg.capture_width, height=cfg.capture_height, flip=cfg.flip, loop=loop)
     title = f"EcoClass-Vision {cfg.room_id}"
     if show:
         cv2.namedWindow(title, cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)   # cửa sổ kéo giãn được

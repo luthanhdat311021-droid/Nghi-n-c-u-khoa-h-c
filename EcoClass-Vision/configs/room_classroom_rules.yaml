@@ -1,0 +1,46 @@
+﻿# BASELINE dùng luật thủ công (lights_auto/fan_auto) — để so sánh với room_classroom.yaml (bộ phân lớp học từ video).
+# Cấu hình đánh giá trên video quay tại 2 phòng học thật (datasets/classroom_videos, nhãn configs/classroom_labels.csv).
+# Video điện thoại cầm tay 1280x720@30fps → xử lý 10 fps.
+#   python scripts/eval_videos.py --config configs/room_classroom_rules.yaml
+room_id: CLASSROOM
+source: datasets/classroom_videos/room1/r1_154.mp4
+fps: 10
+device_model: ../models/devices_yolo11n.pt
+device_conf: 0.45
+tariff_vnd_per_kwh: 2500
+
+person:
+  model: yolo11n-seg.pt
+  imgsz: 640
+  device: "0"
+  conf_occupied: 0.25
+  conf_empty: 0.40
+  hold_seconds: 2
+  window: 7
+
+fsm:
+  empty_seconds_to_pending: 2
+  te_seconds: 15
+  te_no_class_seconds: 15
+  off_confirm_seconds: 3
+
+publisher:
+  mode: none
+
+devices:
+  - id: lights
+    type: lights_auto
+    roi: [0.0, 0.0, 1.0, 1.0]
+    power_w: 72
+    on_frames: 4
+    off_frames: 10
+    params: {per_light_w: 20, v_min: 240, core_v: 250, core_min: 0.6, min_area: 0.0008, max_area: 0.06,
+             fill_min: 0.4, s_mean_max: 12, max_neighbors: 0}
+  - id: fans
+    type: fan_auto
+    roi: [0.0, 0.0, 1.0, 1.0]
+    power_w: 60
+    on_frames: 4
+    off_frames: 16
+    params: {per_fan_w: 60, window: 8, min_frames: 5, tstd_pix: 4.0, heat_alpha: 0.15, heat_on: 0.5,
+             min_area: 0.004, max_aspect: 3.0}

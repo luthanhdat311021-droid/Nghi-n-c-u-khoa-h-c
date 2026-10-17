@@ -1,0 +1,17 @@
+video,room,light,fan,person,note
+room1/r1_154.mp4,1,0,1,0,phòng trống; đèn tắt; quạt quay
+room1/r1_162.mp4,1,1,1,0,phòng trống; đèn bật; quạt quay
+room1/r1_172.mp4,1,1,1,0,phòng trống; đèn bật; quạt quay
+room1/r1_186.mp4,1,0,1,1,2 người đi lại; đèn tắt; quạt quay
+room1/r1_195.mp4,1,1,1,1,2 người; đèn bật; quạt quay
+room1/r1_198.mp4,1,1,1,1,2 người; đèn bật; quạt quay
+room1/r1_204.mp4,1,0,0,0,phòng trống; tất cả tắt
+room1/r1_211.mp4,1,0,0,1,2 người; đèn tắt; quạt đứng yên
+room2/r2_215.mp4,2,0,1,0,phòng trống; đèn tắt; quạt quay
+room2/r2_224.mp4,2,0,1,1,2 người; đèn tắt; quạt quay
+room2/r2_229.mp4,2,1,0,0,phòng trống; đèn bật; quạt đứng yên
+room2/r2_239.mp4,2,1,0,1,2 người; đèn bật; quạt đứng yên
+room2/r2_249.mp4,2,1,1,1,2 người; đèn bật; quạt quay
+room2/r2_255.mp4,2,1,1,0,phòng trống; đèn bật; quạt quay
+room2/r2_263.mp4,2,0,0,0,phòng trống; tất cả tắt
+room2/r2_271.mp4,2,0,0,1,2 người; đèn tắt; quạt đứng yên; camera lia
