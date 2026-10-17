@@ -7,6 +7,7 @@
 | fan               | cánh quay, nhòe chuyển động      | dao động độ sáng theo thời gian + Farnebäck + độ nét       |
 | screen / monitor  | màn sáng, có nội dung            | độ sáng tương đối + phương sai kết cấu                    |
 | ac                | đèn báo dàn lạnh sáng            | tỉ lệ điểm ảnh sáng có màu trong ROI nhỏ                  |
+| ac_temp           | phòng được làm lạnh              | nhiệt độ ESP32 + DHT11 < ngưỡng (không dùng camera)       |
 
 - Mọi thiết bị đều có thể gắn bộ phân lớp MobileNetV3 (``classifier``) thay cho luật thủ công.
 - ``params.track: true`` → ROI dịch theo chuyển động camera (ước lượng bằng tương quan pha, motion.py).
@@ -47,10 +48,12 @@ class SceneInfo:
     cam_moving: bool = False
     cam_reliable: bool = True          # False: khung không còn khớp tham chiếu (camera quay đi hướng khác)
     device_boxes: dict | None = None   # {"light": [...], "fan": [...]} từ DeviceLocator (YOLO), toạ độ chuẩn hoá
+    sensors: dict | None = None        # số liệu ESP32 mới nhất: {"temperature", "humidity", "sensor_ok", ...}
 
 
 def make_scene(frame: np.ndarray, person_boxes: list, person_mask: np.ndarray | None = None,
-               motion=None, dark_v: float = 25.0, device_boxes: dict | None = None) -> SceneInfo:
+               motion=None, dark_v: float = 25.0, device_boxes: dict | None = None,
+               sensors: dict | None = None) -> SceneInfo:
     """``motion``: CameraMotion (tuỳ chọn) — cập nhật độ dịch camera cho các ROI có track."""
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -62,7 +65,7 @@ def make_scene(frame: np.ndarray, person_boxes: list, person_mask: np.ndarray | 
         reliable = motion.reliable
     return SceneInfo(hsv=hsv, gray=gray, mean_v=mean_v, dark=mean_v < dark_v, person_boxes=person_boxes,
                      person_mask=person_mask, cam_offset=(ox, oy), cam_moving=moving, cam_reliable=reliable,
-                     device_boxes=device_boxes)
+                     device_boxes=device_boxes, sensors=sensors)
 
 
 def _overlap(a, b) -> float:
@@ -540,6 +543,31 @@ class ACDetector(DeviceDetector):
         return (ON if on else OFF), frac, {"led_frac": round(frac, 4)}
 
 
+class TempACDetector(DeviceDetector):
+    """Máy lạnh suy từ nhiệt độ phòng (ESP32 + DHT11): BẬT khi nhiệt độ < ``on_below`` (mặc định 30 °C).
+
+    ``off_above`` (mặc định = on_below + 0,5) tạo vùng trễ để nhiệt độ dao động quanh ngưỡng không
+    làm trạng thái lật liên tục. Mất cảm biến → UNKNOWN (không tính là BẬT, không gây cảnh báo giả).
+    Không dùng camera nên bỏ qua ROI và che khuất.
+    """
+
+    def update(self, frame, scene, ts):
+        s = scene.sensors or {}
+        t = s.get("temperature")
+        if t is None:
+            return DeviceReading(self.state, UNKNOWN, 0.0, {"sensor_ok": False})
+        on_below = float(self.p.get("on_below", 30.0))
+        off_above = float(self.p.get("off_above", on_below + 0.5))
+        if t < on_below:
+            raw = ON
+        elif t >= off_above:
+            raw = OFF
+        else:
+            raw = self.state if self.state != UNKNOWN else OFF
+        self._apply_hysteresis(raw)
+        return DeviceReading(self.state, raw, float(t), {"temperature": t, "on_below": on_below})
+
+
 DETECTORS = {
     "light": LightDetector,
     "lights_auto": LightGroupDetector,
@@ -550,6 +578,7 @@ DETECTORS = {
     "monitor": ScreenDetector,
     "tv": ScreenDetector,
     "ac": ACDetector,
+    "ac_temp": TempACDetector,
 }
 
 

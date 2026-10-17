@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text, create_engine
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text, create_engine, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 from .settings import settings
@@ -24,6 +24,19 @@ class Room(Base):
     waste_wh_current: Mapped[float] = mapped_column(Float, default=0.0)
     dark: Mapped[bool] = mapped_column(Boolean, default=False)
     last_seen: Mapped[datetime | None] = mapped_column(DateTime)
+    # ESP32: {"temperature", "humidity", "sensor_ok", "sensor_port", "esp_ip"}
+    sensors: Mapped[dict | None] = mapped_column(JSON)
+    fps: Mapped[float | None] = mapped_column(Float)     # tốc độ xử lý của thiết bị biên
+
+
+class SensorLog(Base):
+    """Lịch sử nhiệt độ/độ ẩm (lấy mẫu thưa, mặc định 30 s/lần) để vẽ biểu đồ."""
+    __tablename__ = "sensor_log"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    room_id: Mapped[str] = mapped_column(String(64), index=True)
+    time: Mapped[datetime] = mapped_column(DateTime, index=True)
+    temperature: Mapped[float | None] = mapped_column(Float)
+    humidity: Mapped[float | None] = mapped_column(Float)
 
 
 class Event(Base):
@@ -65,6 +78,21 @@ class Alert(Base):
     acknowledged_by: Mapped[str | None] = mapped_column(String(64))
     acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime)
     notified: Mapped[bool] = mapped_column(Boolean, default=False)
+    temperature: Mapped[float | None] = mapped_column(Float)     # nhiệt độ phòng lúc cảnh báo
+
+
+def _add_missing_columns(engine) -> None:
+    """create_all không thêm cột mới vào bảng đã có → bổ sung cột còn thiếu (CSDL tạo từ bản cũ)."""
+    insp = inspect(engine)
+    with engine.begin() as conn:
+        for table in Base.metadata.sorted_tables:
+            if not insp.has_table(table.name):
+                continue
+            have = {c["name"] for c in insp.get_columns(table.name)}
+            for col in table.columns:
+                if col.name not in have:
+                    ddl = col.type.compile(dialect=engine.dialect)
+                    conn.execute(text(f'ALTER TABLE {table.name} ADD COLUMN "{col.name}" {ddl}'))
 
 
 def make_engine(url: str | None = None):
@@ -75,6 +103,7 @@ def make_engine(url: str | None = None):
     else:
         engine = create_engine(url, pool_pre_ping=True)
     Base.metadata.create_all(engine)
+    _add_missing_columns(engine)
     return engine
 
 

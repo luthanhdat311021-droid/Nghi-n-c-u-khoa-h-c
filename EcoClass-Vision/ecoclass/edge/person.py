@@ -49,6 +49,8 @@ class PersonCounter:
         kw = dict(imgsz=self.cfg.imgsz, classes=[self.person_cls], verbose=False)
         if self.cfg.device is not None:
             kw["device"] = self.cfg.device
+        if self.cfg.half and self.cfg.device not in (None, "cpu"):
+            kw["quantize"] = 16      # FP16 (Ultralytics >= 8.4 thay tham số half bằng quantize)
 
         if self.use_tracker:
             # Hạ conf của bộ phát hiện để ByteTrack nhận cả box điểm thấp (liên kết lần 2).

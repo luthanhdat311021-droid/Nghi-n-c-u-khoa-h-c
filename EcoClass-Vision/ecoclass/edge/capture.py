@@ -28,8 +28,13 @@ class Frame:
 class FrameSource:
     def __init__(self, source: str, fps: float = 5.0, t0: float | None = None, realtime: bool = False,
                  width: int | None = None, height: int | None = None, flip: str | None = None,
-                 loop: bool = False):
+                 loop: bool = False, rotate: int | None = None, max_side: int | None = None):
         self.source = source
+        # Xoay ảnh (độ, theo chiều kim đồng hồ) — vd điện thoại cầm dọc nhưng app gửi ảnh ngang.
+        self.rotate_code = {90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180,
+                            270: cv2.ROTATE_90_COUNTERCLOCKWISE}.get(rotate or 0)
+        # Thu nhỏ để cạnh dài <= max_side (camera điện thoại 1080p làm quy trình chậm, quạt cần >= 10 fps).
+        self.max_side = max_side
         self.loop = loop                 # file video: phát lặp lại (thời gian tiếp tục tăng) — để chạy thử/demo
         # Lật ảnh: "horizontal" (bỏ hiệu ứng gương), "vertical" (camera lắp ngược), "both".
         self.flip_code = {"horizontal": 1, "vertical": 0, "both": -1}.get(flip or "", None)
@@ -54,6 +59,11 @@ class FrameSource:
                 pass
         if isinstance(src, int) and os.name == "nt":
             cap = cv2.VideoCapture(src, cv2.CAP_DSHOW)   # MSMF hay lỗi grab với webcam laptop
+        elif "://" in str(src):
+            # Camera mạng: luồng treo (điện thoại đổi cài đặt, mất WiFi) → read() trả False sau 5 s
+            # thay vì chờ mãi → _reader tự kết nối lại.
+            cap = cv2.VideoCapture(src, cv2.CAP_FFMPEG, [cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 5000,
+                                                          cv2.CAP_PROP_READ_TIMEOUT_MSEC, 5000])
         else:
             cap = cv2.VideoCapture(src)
         if isinstance(src, int):
@@ -72,9 +82,19 @@ class FrameSource:
 
     def __iter__(self) -> Iterator[Frame]:
         it = self._iter_file() if self.is_file else self._iter_live()
-        if self.flip_code is None:
+        if self.flip_code is None and self.rotate_code is None and not self.max_side:
             return it
-        return (Frame(cv2.flip(f.image, self.flip_code), f.ts, f.index) for f in it)
+        return (Frame(self._transform(f.image), f.ts, f.index) for f in it)
+
+    def _transform(self, img: np.ndarray) -> np.ndarray:
+        if self.max_side and max(img.shape[:2]) > self.max_side:
+            s = self.max_side / max(img.shape[:2])
+            img = cv2.resize(img, (round(img.shape[1] * s), round(img.shape[0] * s)), interpolation=cv2.INTER_AREA)
+        if self.rotate_code is not None:
+            img = cv2.rotate(img, self.rotate_code)
+        if self.flip_code is not None:
+            img = cv2.flip(img, self.flip_code)
+        return img
 
     def _iter_file(self) -> Iterator[Frame]:
         cap = self._open()

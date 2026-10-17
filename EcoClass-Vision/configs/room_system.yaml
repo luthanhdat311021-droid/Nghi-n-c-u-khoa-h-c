@@ -1,0 +1,78 @@
+# HỆ THỐNG QUẢN LÝ PHÒNG HỌC — vận hành liên tục: camera (thị giác máy tính) + ESP32 (nhiệt độ).
+#
+# Luật cảnh báo: KHÔNG CÓ NGƯỜI liên tục 2 phút mà còn ít nhất một trong:
+#   - đèn BẬT  (bộ phân lớp MobileNetV3 trên ảnh camera)
+#   - quạt BẬT (bộ phân lớp ảnh chồng thời gian, cần >= 10 fps)
+#   - nhiệt độ phòng < 30 °C (ESP32 + DHT11 → coi như máy lạnh đang chạy)
+# → phát cảnh báo lên dashboard (+ Telegram nếu cấu hình). Cảnh báo tự đóng khi mọi thiết bị tắt
+#   hoặc có người quay lại.
+#
+# Chạy cả hệ thống bằng một lệnh (tự khởi động lại khi lỗi):
+#   python scripts/run_system.py                       → mở http://127.0.0.1:8000
+#   python scripts/run_system.py --source http://<IP-điện-thoại>:8080/video --rotate 90   (điện thoại cầm dọc)
+#
+# Xử lý 30 fps: các tham số đếm theo KHUNG (on_frames, off_frames, person.window) đã nhân 3 so với bản
+# 10 fps để giữ nguyên thời gian thực tế. Máy yếu không đạt 30 fps thì hạ fps và chia lại các tham số này.
+room_id: C204
+source: "0"                     # "0" = webcam laptop; rtsp://... hoặc http://<IP>:8080/video cho camera IP
+fps: 30
+capture_width: 640
+capture_height: 480
+display_scale: 2.0
+flip: horizontal                # webcam laptop cho ảnh kiểu gương (camera IP: run_system.py tự bỏ lật)
+max_side: 640                   # thu nhỏ ảnh camera điện thoại (1080p) cho đủ nhanh
+# rotate: 90                    # điện thoại cầm dọc: xoay 90° (hoặc chạy với --rotate 90)
+tariff_vnd_per_kwh: 2500
+
+person:
+  model: yolo11n-seg.pt
+  imgsz: 640
+  device: "0"
+  half: true                    # FP16 trên GPU NVIDIA → nhanh hơn
+  conf_occupied: 0.25
+  conf_empty: 0.40
+  hold_seconds: 3
+  window: 30                    # trung vị 1 s
+
+fsm:
+  empty_seconds_to_pending: 3   # N=0 liên tục 3 s → bắt đầu đếm "phòng trống" (tính từ lúc thấy người lần cuối)
+  te_seconds: 120               # trống 2 phút mà còn thiết bị BẬT → CẢNH BÁO
+  te_no_class_seconds: 120
+  off_confirm_seconds: 5        # thiết bị TẮT ổn định 5 s → đóng cảnh báo
+
+sensor:
+  enabled: true
+  port: auto                    # tự tìm mạch ESP32 (COM4, COM5, ...)
+  stale_seconds: 10
+
+publisher:
+  mode: http
+  http_url: http://127.0.0.1:8000
+  heartbeat_seconds: 2
+  frame_fps: 30                 # ảnh xem trực tiếp trên màn hình camera (người đã làm mờ); 0 = tắt
+  frame_width: 640
+
+devices:
+  - id: lights
+    type: light
+    roi: [0.0, 0.0, 1.0, 1.0]
+    classifier: ../models/light_scene_mnv3.onnx
+    power_w: 72
+    on_frames: 15               # 0,5 s
+    off_frames: 30              # 1 s
+    params: {cls_size: [384, 224]}
+  - id: fans
+    type: fan
+    roi: [0.0, 0.0, 1.0, 1.0]
+    classifier: ../models/fan_scene_mnv3.onnx
+    power_w: 60
+    on_frames: 15
+    off_frames: 30
+    params: {cls_input: tstack, cls_size: [384, 224], cls_dt: 0.1}   # cls_dt tính bằng giây, không đổi
+  - id: ac
+    type: ac_temp
+    roi: [0.0, 0.0, 1.0, 1.0]   # không dùng (đo bằng cảm biến)
+    power_w: 1000               # công suất máy lạnh ước tính để tính điện lãng phí
+    on_frames: 60               # nhiệt độ < 30 °C ổn định 2 s (60 khung ở 30 fps)
+    off_frames: 60
+    params: {on_below: 30.0, off_above: 30.5}

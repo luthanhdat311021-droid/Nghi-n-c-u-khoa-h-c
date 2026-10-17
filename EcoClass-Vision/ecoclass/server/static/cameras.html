@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Camera phòng học</title>
+<style>
+  :root { --bg: #0d1016; --tile: #161b24; --text: #e7eaf0; --muted: #98a2b3; --line: #262d39;
+          --occ: #3b82f6; --pend: #e0a100; --alert: #ef4444; --ok: #22a55b; --unk: #6b7280; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, "Segoe UI", Roboto, sans-serif; }
+  header { display: flex; align-items: center; gap: 14px; padding: 10px 16px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  header h1 { margin: 0; font-size: 18px; }
+  header a { color: var(--muted); text-decoration: none; }
+  header a:hover { color: var(--text); }
+  .clock { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--muted); }
+  .pill { padding: 3px 10px; border-radius: 999px; background: var(--line); font-size: 13px; }
+  .pill.alert { background: var(--alert); color: #fff; animation: pulse 1.4s infinite; }
+  button { font: inherit; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--tile); color: var(--text); cursor: pointer; }
+  main { padding: 12px; display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 460px), 1fr)); }
+  main.single { grid-template-columns: 1fr; max-width: 1400px; margin: 0 auto; }
+  .tile { background: var(--tile); border: 3px solid var(--line); border-radius: 10px; overflow: hidden; cursor: zoom-in; }
+  main.single .tile { cursor: zoom-out; }
+  .tile.OCCUPIED { border-color: var(--occ); }
+  .tile.EMPTY_PENDING { border-color: var(--pend); }
+  .tile.EMPTY_SAFE, .tile.RESOLVED { border-color: var(--ok); }
+  .tile.ALERT { border-color: var(--alert); animation: glow 1.4s infinite; }
+  .tile.offline { border-color: var(--unk); }
+  @keyframes pulse { 50% { opacity: .75; } }
+  @keyframes glow { 50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--alert) 45%, transparent); } }
+  .view { position: relative; aspect-ratio: 4 / 3; background: #000; }
+  main.single .view { aspect-ratio: auto; height: 78vh; }
+  .view img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+  .nosignal { position: absolute; inset: 0; display: none; place-items: center; color: var(--muted); text-align: center; }
+  .view.off .nosignal { display: grid; }
+  .view.off img { display: none; }
+  .top { position: absolute; left: 0; right: 0; top: 0; display: flex; justify-content: space-between; align-items: center;
+         padding: 8px 10px; background: linear-gradient(rgba(0,0,0,.7), transparent); }
+  .room { font-weight: 700; font-size: 17px; }
+  .state { font-weight: 600; padding: 2px 9px; border-radius: 6px; background: var(--unk); font-size: 13px; }
+  .state.OCCUPIED { background: var(--occ); } .state.EMPTY_PENDING { background: var(--pend); color: #111; }
+  .state.EMPTY_SAFE, .state.RESOLVED { background: var(--ok); } .state.ALERT { background: var(--alert); }
+  .info { padding: 8px 10px; display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; }
+  .info b { font-size: 18px; font-variant-numeric: tabular-nums; }
+  .chip { padding: 1px 8px; border-radius: 999px; font-size: 12px; border: 1px solid var(--line); color: var(--muted); }
+  .chip.ON { border-color: var(--alert); color: #fff; background: color-mix(in srgb, var(--alert) 35%, transparent); }
+  .bar { height: 5px; background: var(--line); }
+  .bar i { display: block; height: 100%; background: var(--pend); }
+  .warn { color: #fff; background: var(--alert); padding: 6px 10px; font-weight: 600; }
+  .empty { color: var(--muted); padding: 40px; text-align: center; grid-column: 1 / -1; }
+</style>
+</head>
+<body>
+<header>
+  <h1>📹 Camera phòng học</h1>
+  <a href="/">← Dashboard</a>
+  <span class="pill" id="summary">Đang tải…</span>
+  <button id="soundBtn" onclick="enableSound()">🔔 Bật âm báo</button>
+  <span class="clock" id="clock"></span>
+</header>
+<main id="grid"><div class="empty">Đang tải…</div></main>
+<script>
+const STATE_VI = {OCCUPIED: "Có người", EMPTY_PENDING: "Nghi vắng", ALERT: "BỎ QUÊN THIẾT BỊ", RESOLVED: "Đã xử lý", EMPTY_SAFE: "Trống – an toàn"};
+const DEVICE_VI = {lights: "Đèn", fans: "Quạt", ac: "Máy lạnh"};
+const TE = 120;
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const mmss = s => { s = Math.max(0, Math.round(s)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
+let tiles = {}, focus = null, soundOn = false, audioCtx, alerting = new Set();
+
+function makeTile(id) {
+  const el = document.createElement("div");
+  el.className = "tile";
+  el.innerHTML = `<div class="view off"><img alt="Camera phòng ${esc(id)}">
+      <div class="nosignal">📷<br>Mất tín hiệu camera</div>
+      <div class="top"><span class="room">${esc(id)}</span><span class="state"></span></div></div>
+    <div class="bar"><i style="width:0"></i></div><div class="warn" hidden></div><div class="info"></div>`;
+  el.onclick = () => { focus = focus === id ? null : id; layout(); };
+  el._img = el.querySelector("img");
+  return el;
+}
+
+// Video MJPEG: trình duyệt tự hiển thị từng ảnh mới. Mất tín hiệu → gỡ luồng, có lại → mở lại.
+function setStream(el, id, live) {
+  const view = el.querySelector(".view");
+  view.classList.toggle("off", !live);
+  if (live && !el._streaming) {
+    el._img.src = `/api/rooms/${encodeURIComponent(id)}/stream.mjpg?t=${Date.now()}`;
+    el._streaming = true;
+  } else if (!live && el._streaming) {
+    el._img.removeAttribute("src");
+    el._streaming = false;
+  }
+}
+
+function update(el, r) {
+  const st = r.online ? r.state : "offline";
+  el.className = `tile ${st}`;
+  const badge = el.querySelector(".state");
+  badge.className = `state ${r.online ? r.state : ""}`;
+  badge.textContent = r.online ? (STATE_VI[r.state] || r.state || "?") : "Mất kết nối";
+  const pending = r.online && r.state === "EMPTY_PENDING";
+  el.querySelector(".bar i").style.width = pending ? Math.min(100, r.empty_seconds / TE * 100) + "%" : "0";
+  const on = Object.entries(r.devices || {}).filter(([, v]) => v === "ON").map(([k]) => DEVICE_VI[k] || k);
+  const warn = el.querySelector(".warn");
+  warn.hidden = !(r.online && r.state === "ALERT");
+  warn.textContent = `⚠️ Không có người ${mmss(r.empty_seconds)} mà còn bật: ${on.join(", ")}`;
+  const s = r.sensors || {};
+  const chips = Object.entries(r.devices || {}).map(([k, v]) =>
+    `<span class="chip ${v}">${esc(DEVICE_VI[k] || k)}: ${v === "ON" ? "BẬT" : v === "OFF" ? "tắt" : "?"}</span>`).join("");
+  el.querySelector(".info").innerHTML =
+    `<span>👤 <b>${r.people}</b></span>` +
+    (r.sensors ? `<span>🌡️ <b>${s.temperature != null ? s.temperature.toFixed(1) + "°C" : "--"}</b></span>
+                  <span>💧 <b>${s.humidity != null ? Math.round(s.humidity) + "%" : "--"}</b></span>` : "") +
+    (pending ? `<span style="color:var(--pend)">Vắng ${mmss(r.empty_seconds)} / ${mmss(TE)}</span>` : "") + chips +
+    (r.fps != null ? `<span class="chip" title="Tốc độ xử lý (bộ nhận diện quạt cần >= 10)">${r.fps.toFixed(1)} FPS</span>` : "");
+}
+
+function layout() {
+  const grid = document.getElementById("grid");
+  grid.classList.toggle("single", !!focus);
+  for (const [id, el] of Object.entries(tiles)) el.hidden = focus !== null && id !== focus;
+}
+
+async function load() {
+  let rooms;
+  try { rooms = await fetch("/api/rooms").then(r => r.json()); }
+  catch { document.getElementById("summary").textContent = "Mất kết nối máy chủ"; return; }
+  // Phòng hoạt động trong 1 giờ qua (bỏ phòng thử nghiệm cũ)
+  rooms = rooms.filter(r => r.last_seen && Date.now() - new Date(r.last_seen) < 3600e3);
+  const grid = document.getElementById("grid");
+  if (!rooms.length) { grid.innerHTML = `<div class="empty">Chưa có phòng nào đang gửi dữ liệu. Hãy chạy scripts/run_system.py</div>`; tiles = {}; return; }
+  if (grid.querySelector(".empty")) grid.innerHTML = "";
+  for (const r of rooms) {
+    if (!tiles[r.room_id]) { tiles[r.room_id] = makeTile(r.room_id); grid.appendChild(tiles[r.room_id]); }
+    update(tiles[r.room_id], r);
+    setStream(tiles[r.room_id], r.room_id, r.has_frame);
+  }
+  for (const id of Object.keys(tiles)) if (!rooms.find(r => r.room_id === id)) { tiles[id].remove(); delete tiles[id]; }
+  if (focus && !tiles[focus]) focus = null;
+  layout();
+  const now = new Set(rooms.filter(r => r.online && r.state === "ALERT").map(r => r.room_id));
+  if ([...now].some(id => !alerting.has(id))) beep();
+  alerting = now;
+  const sum = document.getElementById("summary");
+  sum.className = "pill" + (now.size ? " alert" : "");
+  sum.textContent = now.size ? `⚠️ ${now.size} phòng bỏ quên thiết bị` : `${rooms.length} phòng · không có cảnh báo`;
+  document.title = now.size ? `(${now.size}) ⚠️ Camera phòng học` : "Camera phòng học";
+}
+
+function enableSound() {
+  soundOn = true;
+  audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+  document.getElementById("soundBtn").textContent = "🔔 Âm báo: bật";
+  beep();
+}
+function beep() {
+  if (!soundOn || !audioCtx) return;
+  [0, .35, .7].forEach(t => { const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.frequency.value = 880; g.gain.value = .2; o.connect(g); g.connect(audioCtx.destination);
+    o.start(audioCtx.currentTime + t); o.stop(audioCtx.currentTime + t + .2); });
+}
+setInterval(() => document.getElementById("clock").textContent = new Date().toLocaleString("vi-VN"), 1000);
+load();
+setInterval(load, 1500);
+</script>
+</body>
+</html>

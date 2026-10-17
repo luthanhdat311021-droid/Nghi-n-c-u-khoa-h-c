@@ -35,6 +35,30 @@ class Publisher:
             raise ValueError(f"publisher.mode không hợp lệ: {cfg.mode}")
         self._th = threading.Thread(target=self._worker, daemon=True)
         self._th.start()
+        # Ảnh xem trực tiếp: chỉ giữ ảnh mới nhất, gửi ở luồng riêng → không chặn sự kiện/cảnh báo.
+        self._frame: bytes | None = None
+        self._frame_ready = threading.Event()
+        if cfg.mode == "http":
+            threading.Thread(target=self._frame_worker, daemon=True).start()
+
+    def publish_frame(self, jpeg: bytes) -> None:
+        self._frame = jpeg
+        self._frame_ready.set()
+
+    def _frame_worker(self) -> None:
+        import requests
+
+        session = requests.Session()
+        headers = {"Content-Type": "image/jpeg", **({"X-API-Key": self.cfg.api_key} if self.cfg.api_key else {})}
+        while True:
+            self._frame_ready.wait()
+            self._frame_ready.clear()
+            jpeg = self._frame
+            try:
+                session.post(f"{self.cfg.http_url}/api/ingest/frame/{self.room_id}", data=jpeg, headers=headers,
+                             timeout=5).raise_for_status()
+            except Exception:
+                time.sleep(2)          # máy chủ chưa sẵn sàng: bỏ ảnh này, thử ảnh sau
 
     def publish_state(self, snapshot: dict) -> None:
         self._put("state", snapshot)

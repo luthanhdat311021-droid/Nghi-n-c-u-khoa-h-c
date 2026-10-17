@@ -24,6 +24,8 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", required=True)
     ap.add_argument("--source", help="ghi đè nguồn video trong cấu hình")
+    ap.add_argument("--flip", choices=["none", "horizontal", "vertical", "both"], help="ghi đè cách lật ảnh")
+    ap.add_argument("--rotate", type=int, choices=[0, 90, 180, 270], help="xoay ảnh theo chiều kim đồng hồ")
     ap.add_argument("--publisher", choices=["http", "mqtt", "stdout", "none"], help="ghi đè publisher.mode")
     ap.add_argument("--show", action="store_true", help="hiển thị cửa sổ gỡ lỗi (người đã làm mờ)")
     ap.add_argument("--save-video", help="lưu video gỡ lỗi (người đã làm mờ)")
@@ -42,6 +44,10 @@ def main() -> None:
     cfg = load_room_config(a.config)
     if a.source:
         cfg.source = a.source
+    if a.flip:
+        cfg.flip = None if a.flip == "none" else a.flip
+    if a.rotate is not None:
+        cfg.rotate = a.rotate or None
     if a.publisher:
         cfg.publisher.mode = a.publisher
     pub = None if cfg.publisher.mode == "none" else Publisher(cfg.publisher, cfg.room_id)

@@ -45,9 +45,14 @@ class EdgePipeline:
         use_tracker: bool = True,
         temporal: bool = True,
         frame_log: str | None = None,
+        sensor=None,
     ):
         self.cfg = cfg
         self.publisher = publisher
+        if sensor is None and cfg.sensor.enabled:
+            from .esp32 import ESP32Sensor
+            sensor = ESP32Sensor(cfg.sensor.port, cfg.sensor.baud, cfg.sensor.stale_seconds).start()
+        self.sensor = sensor          # ESP32Sensor hoặc vật giả có .latest() (kiểm thử)
         self.counter = PersonCounter(cfg.person, use_tracker=use_tracker, model_path=cfg.resolve(cfg.person.model))
         for d in cfg.devices:
             d.classifier = cfg.resolve(d.classifier)
@@ -76,6 +81,8 @@ class EdgePipeline:
         self.frame_log = open(frame_log, "w", encoding="utf-8", buffering=1) if frame_log else None
         self.events: list[dict] = []
         self._last_hb = 0.0
+        self._last_frame = 0.0
+        self.fps: float | None = None   # tốc độ xử lý thực tế (run() cập nhật) → gửi kèm heartbeat
 
     def _te(self, ts: float) -> float:
         if not self.timetable.slots:
@@ -88,7 +95,8 @@ class EdgePipeline:
         occupied = self.fsm.state == RoomState.OCCUPIED
         pr = self.counter.update(frame, ts, occupied=occupied)
         dev_boxes = self.locator(frame) if self.locator is not None else None
-        scene = make_scene(frame, pr.boxes, pr.mask, motion=self.motion, device_boxes=dev_boxes)
+        sensors = self.sensor.latest() if self.sensor is not None else None
+        scene = make_scene(frame, pr.boxes, pr.mask, motion=self.motion, device_boxes=dev_boxes, sensors=sensors)
         readings = {k: det.update(frame, scene, ts) for k, det in self.detectors.items()}
         states = {k: r.state for k, r in readings.items()}
         for k, det in self.detectors.items():
@@ -103,6 +111,8 @@ class EdgePipeline:
             d["in_class"] = bool(self.timetable.slots) and self.timetable.in_session(self.cfg.room_id, datetime.fromtimestamp(ts))
             d["power_w"] = {k: self.detectors[k].cfg.power_w for k in d["devices_on"]}
             d["tariff_vnd_per_kwh"] = self.cfg.tariff_vnd_per_kwh
+            if sensors:
+                d["temperature"], d["humidity"] = sensors["temperature"], sensors["humidity"]
             jpeg = None
             if ev.type == "alert":
                 jpeg = encode_jpeg(self.render_evidence(frame, pr.boxes, states), self.cfg.evidence_max_width)
@@ -110,8 +120,14 @@ class EdgePipeline:
             if self.publisher:
                 self.publisher.publish_event(d, jpeg)
 
-        snap = self.fsm.snapshot(ts, pr.n, states)
+        # Hiển thị: số người thấy trong khung hiện tại. pr.n (dùng cho máy trạng thái) còn tính cả vết vừa
+        # mất dấu trong hold_seconds để không báo "vắng" giả → khi ID đổi liên tục, pr.n đếm dư.
+        snap = self.fsm.snapshot(ts, len(pr.boxes) if pr.boxes else pr.n, states)
         snap["dark"] = scene.dark
+        if self.fps is not None:
+            snap["fps"] = round(self.fps, 1)
+        if sensors is not None:
+            snap["sensors"] = sensors
         if self.publisher and ts - self._last_hb >= self.cfg.publisher.heartbeat_seconds:
             self._last_hb = ts
             self.publisher.publish_state(snap)
@@ -123,10 +139,27 @@ class EdgePipeline:
                 "features": {k: r.features for k, r in readings.items()},
             }, ensure_ascii=False, default=_json_default) + "\n")
 
-        return {"person": pr, "readings": readings, "states": states, "events": events, "snapshot": snap}
+        out = {"person": pr, "readings": readings, "states": states, "events": events, "snapshot": snap}
+        pc = self.cfg.publisher
+        # Dung sai 20%: khung camera đến lệch nhịp vài ms, so sánh chặt sẽ bỏ gần nửa số khung.
+        if self.publisher and pc.frame_fps > 0 and ts - self._last_frame >= 0.8 / pc.frame_fps:
+            self._last_frame = ts
+            self.publisher.publish_frame(encode_jpeg(self.render_stream(frame, pr), pc.frame_width, quality=75))
+        return out
+
+    def render_stream(self, frame, pr) -> np.ndarray:
+        """Ảnh cho màn hình camera: người đã làm mờ + khung người mảnh, không chữ
+        (trạng thái/nhiệt độ do trang web hiển thị)."""
+        img = blur_mask(frame, pr.mask) if pr.mask is not None else blur_boxes(frame, pr.boxes)
+        th = max(1, img.shape[1] // 400)
+        for b in pr.boxes:
+            cv2.rectangle(img, (int(b[0]), int(b[1])), (int(b[2]), int(b[3])), (255, 200, 0), th, cv2.LINE_AA)
+        return img
 
     def _device_boxes(self, det) -> list[list[float]]:
         """Các vùng cần vẽ cho thiết bị: ROI hiện tại (đã bám) hoặc các đèn tự dò."""
+        if det.cfg.type == "ac_temp":      # đo bằng cảm biến, không có vùng trên ảnh
+            return []
         blobs = getattr(det, "blobs", None)
         return blobs if blobs is not None else [det.roi]
 
@@ -173,6 +206,8 @@ class EdgePipeline:
             label = f"{k}:{r.state}" + ("" if r.raw != "UNKNOWN" else "?")
             if "count" in r.features:
                 label += f" ({r.features['count']} {'quat' if det.cfg.type == 'fan_auto' else 'den'})"
+            if "temperature" in r.features:
+                label += f" ({r.features['temperature']:.1f}C)"
             boxes = self._device_boxes(det)
             for roi in boxes:
                 x1, y1, x2, y2 = roi_to_px(roi, w, h)
@@ -214,7 +249,8 @@ def run(
     loop: bool = False,
 ) -> list[dict]:
     source = FrameSource(cfg.resolve(cfg.source), fps=cfg.fps, t0=t0, realtime=realtime,
-                         width=cfg.capture_width, height=cfg.capture_height, flip=cfg.flip, loop=loop)
+                         width=cfg.capture_width, height=cfg.capture_height, flip=cfg.flip, loop=loop,
+                         rotate=cfg.rotate, max_side=cfg.max_side)
     title = f"EcoClass-Vision {cfg.room_id}"
     if show:
         cv2.namedWindow(title, cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)   # cửa sổ kéo giãn được
@@ -233,7 +269,7 @@ def run(
             inst = 1.0 / max(now - t_prev, 1e-6)
             fps_ema = inst if fps_ema is None else 0.9 * fps_ema + 0.1 * inst
             t_prev = now
-            out["fps"] = fps_ema
+            out["fps"] = pipe.fps = fps_ema
             for ev in out["events"]:
                 extra = f" waste={ev.waste_wh:.2f}Wh reason={ev.reason}" if ev.type != "state_change" else f" ({ev.reason})"
                 print(f"[{datetime.fromtimestamp(ev.ts):%H:%M:%S}] {ev.type:13s} {ev.state_from} -> {ev.state_to}"

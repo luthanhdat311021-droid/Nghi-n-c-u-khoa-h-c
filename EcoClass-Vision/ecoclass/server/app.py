@@ -9,23 +9,25 @@ Chạy:  uvicorn ecoclass.server.app:app --host 0.0.0.0 --port 8000
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import html
+import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import cv2
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from sqlalchemy import select
 
 from ..edge.privacy import blur_boxes
 from ..timetable import Timetable
-from .db import Alert, Event, Room, SessionLocal
+from .db import Alert, Event, Room, SensorLog, SessionLocal
 from .settings import settings
-from .telegram_bot import STATE_VI, TelegramBot
+from .telegram_bot import STATE_VI, TelegramBot, devices_vi
 from .verifier import make_verifier
 
 STATIC = Path(__file__).parent / "static"
@@ -34,6 +36,10 @@ verifier = make_verifier(settings.vlm, settings.vlm_device)
 timetable = Timetable.load(settings.timetable)
 worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="verify")
 Path(settings.evidence_dir).mkdir(parents=True, exist_ok=True)
+SENSOR_LOG_SECONDS = 30.0          # ghi lịch sử nhiệt độ thưa để CSDL không phình to
+OFFLINE_SECONDS = 30.0             # quá lâu không nhận heartbeat → thiết bị biên mất kết nối
+_last_sensor_log: dict[str, float] = {}
+_frames: dict[str, tuple[bytes, float]] = {}   # room_id → (JPEG mới nhất, thời điểm nhận)
 
 
 def check_key(x_api_key: str | None = Header(default=None)) -> None:
@@ -56,6 +62,16 @@ def handle_state(p: dict) -> None:
         room.waste_wh_current = float(p.get("waste_wh_current", 0.0))
         room.dark = bool(p.get("dark", False))
         room.last_seen = _dt(p["ts"])
+        room.fps = p.get("fps")
+        sensors = p.get("sensors")
+        if sensors is not None:
+            room.sensors = sensors
+            ts = float(p["ts"])
+            if sensors.get("temperature") is not None and \
+                    ts - _last_sensor_log.get(room.room_id, 0.0) >= SENSOR_LOG_SECONDS:
+                _last_sensor_log[room.room_id] = ts
+                s.add(SensorLog(room_id=room.room_id, time=room.last_seen,
+                                temperature=sensors.get("temperature"), humidity=sensors.get("humidity")))
         s.merge(room)
         s.commit()
 
@@ -84,7 +100,7 @@ def handle_event(p: dict) -> None:
             s.merge(Alert(alert_id=p["alert_id"], room_id=p["room_id"], started=when,
                           devices_on=p.get("devices_on", []), power_w=p.get("power_w", {}),
                           empty_seconds=float(p.get("empty_seconds", 0.0)), in_class=slot is not None,
-                          course=slot.course if slot else None,
+                          course=slot.course if slot else None, temperature=p.get("temperature"),
                           status="verifying" if settings.vlm != "off" else "open", evidence_path=path))
             s.commit()
             worker.submit(_verify_and_notify, p["alert_id"])
@@ -142,11 +158,12 @@ def _verify_and_notify(alert_id: str) -> None:
 
 
 def _notify_alert(a: Alert) -> bool:
-    devices = ", ".join(a.devices_on) or "?"
+    devices = devices_vi(a.devices_on) or "?"
     kw = sum(a.power_w.values()) / 1000 if a.power_w else 0
     ctx = f"Lịch học: {html.escape(a.course)}" if a.in_class and a.course else "Ngoài giờ học"
+    temp = f"Nhiệt độ phòng: {a.temperature:.1f} °C\n" if a.temperature is not None else ""
     caption = (f"⚠️ <b>Phòng {html.escape(a.room_id)} bị bỏ quên thiết bị điện</b>\n"
-               f"Thời điểm: {a.started:%H:%M %d/%m/%Y}\nThiết bị đang bật: {html.escape(devices)} (~{kw:.2f} kW)\n"
+               f"Thời điểm: {a.started:%H:%M %d/%m/%Y}\nThiết bị đang bật: {html.escape(devices)} (~{kw:.2f} kW)\n{temp}"
                f"Không có người trong {a.empty_seconds / 60:.0f} phút. {ctx}\n"
                f"Xác nhận: /ack {a.alert_id}")
     jpeg = Path(a.evidence_path).read_bytes() if a.evidence_path and Path(a.evidence_path).exists() else None
@@ -165,14 +182,17 @@ def _cmd_status(arg: str, cid: str) -> str:
     lines = []
     for r in rooms:
         on = [k for k, v in (r.devices or {}).items() if v == "ON"]
-        lines.append(f"<b>{html.escape(r.room_id)}</b>: {STATE_VI.get(r.state, r.state)} · {r.people} người · bật: {', '.join(on) or 'không'}")
+        t = (r.sensors or {}).get("temperature")
+        temp = f" · {t:.1f} °C" if t is not None else ""
+        lines.append(f"<b>{html.escape(r.room_id)}</b>: {STATE_VI.get(r.state, r.state)} · {r.people} người · "
+                     f"bật: {devices_vi(on) or 'không'}{temp}")
     return "\n".join(lines)
 
 
 def _cmd_alerts(arg: str, cid: str) -> str:
     with SessionLocal() as s:
         rows = s.scalars(select(Alert).where(Alert.status == "open").order_by(Alert.started.desc())).all()
-    return "\n".join(f"• {a.room_id} từ {a.started:%H:%M} — {', '.join(a.devices_on)} (/ack {a.alert_id})" for a in rows) \
+    return "\n".join(f"• {a.room_id} từ {a.started:%H:%M} — {devices_vi(a.devices_on)} (/ack {a.alert_id})" for a in rows) \
         or "Không có cảnh báo đang mở."
 
 
@@ -213,17 +233,63 @@ def ingest_event(p: dict):
     return {"ok": True}
 
 
+@app.post("/api/ingest/frame/{room_id}", dependencies=[Depends(check_key)])
+async def ingest_frame(room_id: str, request: Request):
+    """Ảnh xem trực tiếp mới nhất của phòng (đã làm mờ người tại biên). Chỉ giữ trong RAM, không lưu đĩa."""
+    data = await request.body()
+    if not data.startswith(b"\xff\xd8"):
+        raise HTTPException(400, "Cần ảnh JPEG")
+    _frames[room_id] = (data, time.time())
+    return {"ok": True}
+
+
+@app.get("/api/rooms/{room_id}/frame.jpg")
+def room_frame(room_id: str):
+    f = _frames.get(room_id)
+    if f is None or time.time() - f[1] > OFFLINE_SECONDS:
+        raise HTTPException(404, "Chưa có ảnh camera")
+    return Response(f[0], media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/rooms/{room_id}/stream.mjpg")
+async def room_stream(room_id: str, request: Request):
+    """Video trực tiếp dạng MJPEG (dùng thẳng trong thẻ <img>), gửi mỗi ảnh mới ngay khi thiết bị biên đẩy lên."""
+    async def gen():
+        last = None
+        while not await request.is_disconnected():
+            f = _frames.get(room_id)
+            if f is not None and f[1] != last:
+                last = f[1]
+                yield (b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: " + str(len(f[0])).encode()
+                       + b"\r\n\r\n" + f[0] + b"\r\n")
+            await asyncio.sleep(0.01)
+    return StreamingResponse(gen(), media_type="multipart/x-mixed-replace; boundary=frame",
+                             headers={"Cache-Control": "no-store"})
+
+
 @app.get("/api/rooms")
 def rooms():
     with SessionLocal() as s:
         rows = s.scalars(select(Room).order_by(Room.room_id)).all()
         open_alerts = {a.room_id: a.alert_id for a in s.scalars(select(Alert).where(Alert.status == "open"))}
+    now = datetime.now()
     return [{
         "room_id": r.room_id, "state": r.state, "state_vi": STATE_VI.get(r.state, r.state), "people": r.people,
         "devices": r.devices, "empty_seconds": r.empty_seconds, "waste_wh_current": r.waste_wh_current,
         "dark": r.dark, "last_seen": r.last_seen.isoformat() if r.last_seen else None,
-        "open_alert": open_alerts.get(r.room_id),
+        "online": bool(r.last_seen and (now - r.last_seen).total_seconds() <= OFFLINE_SECONDS),
+        "sensors": r.sensors, "fps": r.fps, "open_alert": open_alerts.get(r.room_id),
+        "has_frame": r.room_id in _frames and time.time() - _frames[r.room_id][1] <= OFFLINE_SECONDS,
     } for r in rows]
+
+
+@app.get("/api/sensors")
+def sensor_history(room_id: str, minutes: int = Query(120, ge=1, le=60 * 24 * 7)):
+    since = datetime.now() - timedelta(minutes=minutes)
+    with SessionLocal() as s:
+        q = select(SensorLog).where(SensorLog.room_id == room_id, SensorLog.time >= since).order_by(SensorLog.time)
+        return [{"time": x.time.isoformat(), "temperature": x.temperature, "humidity": x.humidity}
+                for x in s.scalars(q)]
 
 
 def _alert_dict(a: Alert) -> dict:
@@ -234,7 +300,7 @@ def _alert_dict(a: Alert) -> dict:
         "devices_on": a.devices_on, "status": a.status, "close_reason": a.close_reason,
         "waste_wh": a.waste_wh, "cost_vnd": a.cost_vnd, "in_class": a.in_class, "course": a.course,
         "verified": a.verified, "verify_note": a.verify_note, "has_evidence": bool(a.evidence_path),
-        "acknowledged_by": a.acknowledged_by,
+        "acknowledged_by": a.acknowledged_by, "temperature": a.temperature,
     }
 
 
@@ -334,6 +400,11 @@ def get_timetable(room_id: str | None = None):
 @app.get("/", response_class=HTMLResponse)
 def dashboard():
     return (STATIC / "index.html").read_text(encoding="utf-8")
+
+
+@app.get("/cameras", response_class=HTMLResponse)
+def cameras_page():
+    return (STATIC / "cameras.html").read_text(encoding="utf-8")
 
 
 @app.get("/healthz")

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>EcoClass-Vision</title>
+<title>Quản lý phòng học</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <style>
   :root {
@@ -54,19 +54,40 @@
   dialog { border: none; border-radius: 10px; padding: 0; max-width: 92vw; }
   dialog img { display: block; max-width: 92vw; max-height: 86vh; }
   .chart-box { position: relative; height: 220px; }
+  .banner { display: none; background: var(--alert); color: #fff; border-radius: 10px; padding: 12px 16px; animation: pulse 1.6s infinite; }
+  .banner.show { display: block; }
+  .banner b { font-size: 16px; }
+  .banner ul { margin: 6px 0 0; padding-left: 20px; }
+  @keyframes pulse { 50% { opacity: .82; } }
+  .sense { display: flex; gap: 14px; margin-top: 8px; align-items: baseline; }
+  .sense b { font-size: 22px; font-variant-numeric: tabular-nums; }
+  .sense .cold { color: var(--occ); }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--unk); margin-right: 4px; }
+  .dot.ok { background: var(--ok); } .dot.bad { background: var(--alert); }
+  .countdown { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin-top: 6px; }
+  .countdown i { display: block; height: 100%; background: var(--pend); }
+  .rule { color: var(--muted); font-size: 13px; }
 </style>
 </head>
 <body>
 <header>
-  <h1>EcoClass-Vision</h1>
-  <span>Giám sát phòng học bị bỏ quên thiết bị điện</span>
-  <span id="updated" style="margin-left:auto"></span>
+  <h1>Quản lý phòng học</h1>
+  <span>EcoClass-Vision · camera + ESP32</span>
+  <a href="/cameras" style="color:var(--occ);font-weight:600;text-decoration:none">📹 Màn hình camera</a>
+  <button id="soundBtn" onclick="enableSound()" style="margin-left:auto">🔔 Bật âm báo</button>
+  <span id="updated"></span>
 </header>
 <main>
+  <section class="banner" id="banner"></section>
   <section class="kpis" id="kpis"></section>
   <section class="card">
     <h2>Trạng thái phòng học</h2>
-    <div class="rooms" id="rooms"><span class="muted">Chưa có dữ liệu từ thiết bị biên.</span></div>
+    <div class="rule">Cảnh báo khi phòng <b>không có người liên tục 2 phút</b> mà còn <b>đèn</b> hoặc <b>quạt</b> bật, hoặc <b>nhiệt độ dưới 30 °C</b> (máy lạnh đang chạy).</div>
+    <div class="rooms" id="rooms" style="margin-top:10px"><span class="muted">Chưa có dữ liệu từ thiết bị biên.</span></div>
+  </section>
+  <section class="card">
+    <h2>Nhiệt độ &amp; độ ẩm (2 giờ gần nhất) <select id="roomSel" onchange="loadSensors()"></select></h2>
+    <div class="chart-box"><canvas id="tempChart"></canvas></div>
   </section>
   <section class="grid2">
     <div class="card"><h2>Điện năng lãng phí theo khung giờ (kWh, 7 ngày)</h2><div class="chart-box"><canvas id="hourChart"></canvas></div></div>
@@ -76,7 +97,7 @@
     <h2>Lịch sử cảnh báo</h2>
     <div class="table-wrap">
     <table>
-      <thead><tr><th>Ảnh bằng chứng</th><th>Phòng</th><th>Bắt đầu</th><th>Thiết bị bật</th><th>Trạng thái</th>
+      <thead><tr><th>Ảnh bằng chứng</th><th>Phòng</th><th>Bắt đầu</th><th>Thiết bị bật</th><th class="num">Nhiệt độ</th><th>Trạng thái</th>
         <th class="num">Thời gian (phút)</th><th class="num">Lãng phí (Wh)</th><th class="num">Chi phí (đ)</th><th>Xác minh VLM</th><th></th></tr></thead>
       <tbody id="alerts"></tbody>
     </table>
@@ -89,7 +110,11 @@ const STATUS_VI = {open: "Đang mở", closed: "Đã đóng", rejected: "Cảnh 
 const REASON_VI = {devices_off: "thiết bị đã tắt", person_returned: "có người quay lại"};
 const fmt = (x, d = 0) => Number(x || 0).toLocaleString("vi-VN", {maximumFractionDigits: d, minimumFractionDigits: d});
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-let hourChart, roomChart;
+const DEVICE_VI = {lights: "Đèn", fans: "Quạt", ac: "Máy lạnh"};
+const devName = k => DEVICE_VI[k] || k;
+const devList = ids => (ids || []).map(devName).join(", ");
+const TE_SECONDS = 120;
+let hourChart, roomChart, tempChart, roomIds = [], knownAlerts = null, soundOn = false, audioCtx;
 
 function css(v) { return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
 
@@ -99,8 +124,10 @@ async function load() {
       ["/api/rooms", "/api/alerts?limit=50", "/api/stats?days=7"].map(u => fetch(u).then(r => r.json())));
     renderKpis(rooms, stats);
     renderRooms(rooms);
+    renderBanner(rooms, alerts);
     renderAlerts(alerts);
     renderCharts(stats);
+    updateRoomSelect(rooms);
     document.getElementById("updated").textContent = "Cập nhật " + new Date().toLocaleTimeString("vi-VN");
   } catch (e) {
     document.getElementById("updated").textContent = "Mất kết nối máy chủ";
@@ -120,18 +147,113 @@ function renderKpis(rooms, st) {
   document.getElementById("kpis").innerHTML = items.map(([v, l]) => `<div class="card kpi"><b>${v}</b><span>${l}</span></div>`).join("");
 }
 
+function mmss(s) { s = Math.max(0, Math.round(s)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }
+
 function renderRooms(rooms) {
   if (!rooms.length) return;
   document.getElementById("rooms").innerHTML = rooms.map(r => {
-    const chips = Object.entries(r.devices || {}).map(([k, v]) => `<span class="chip ${v}">${esc(k)}: ${v === "ON" ? "BẬT" : v === "OFF" ? "tắt" : "?"}</span>`).join("");
-    const extra = r.state === "ALERT" || r.state === "EMPTY_PENDING"
-      ? `<div class="muted">Vắng ${fmt(r.empty_seconds / 60, 1)} phút · lãng phí ${fmt(r.waste_wh_current, 1)} Wh</div>` : "";
-    return `<div class="card room ${r.state}">
+    const chips = Object.entries(r.devices || {}).map(([k, v]) => `<span class="chip ${v}">${esc(devName(k))}: ${v === "ON" ? "BẬT" : v === "OFF" ? "tắt" : "?"}</span>`).join("");
+    let extra = "";
+    if (r.state === "EMPTY_PENDING") {
+      const pct = Math.min(100, r.empty_seconds / TE_SECONDS * 100);
+      extra = `<div class="muted">Không có người ${mmss(r.empty_seconds)} / ${mmss(TE_SECONDS)}</div><div class="countdown"><i style="width:${pct}%"></i></div>`;
+    } else if (r.state === "ALERT") {
+      extra = `<div class="muted">Không có người ${mmss(r.empty_seconds)} · lãng phí ${fmt(r.waste_wh_current, 1)} Wh</div>`;
+    }
+    const s = r.sensors;
+    const sense = s ? `<div class="sense">
+        <span>🌡️ <b class="${s.temperature != null && s.temperature < 30 ? "cold" : ""}">${s.temperature != null ? fmt(s.temperature, 1) + " °C" : "--"}</b></span>
+        <span>💧 <b>${s.humidity != null ? fmt(s.humidity, 0) + " %" : "--"}</b></span></div>` : "";
+    const health = `<div class="muted" style="margin-top:6px">
+        <span class="dot ${r.online ? "ok" : "bad"}"></span>Camera ${r.online ? "đang chạy" : "MẤT KẾT NỐI"}
+        &nbsp; <span class="dot ${s ? (s.sensor_ok ? "ok" : "bad") : ""}"></span>ESP32 ${s ? (s.sensor_ok ? esc(s.sensor_port || "") : "mất kết nối") : "chưa cấu hình"}</div>`;
+    return `<div class="card room ${r.online ? r.state : ""}">
       <div class="name">${esc(r.room_id)}</div>
       <div class="st">${esc(r.state_vi)}${r.dark ? " · phòng tối" : ""}</div>
       <div class="muted">${r.people} người · ${r.last_seen ? new Date(r.last_seen).toLocaleTimeString("vi-VN") : ""}</div>
-      ${extra}<div class="chips">${chips}</div></div>`;
+      ${sense}${extra}<div class="chips">${chips}</div>${health}</div>`;
   }).join("");
+}
+
+function renderBanner(rooms, alerts) {
+  // Chỉ báo các phòng vừa hoạt động trong 1 giờ qua (bỏ qua phòng thử nghiệm cũ còn sót cảnh báo mở).
+  const recent = new Set(rooms.filter(r => r.last_seen && Date.now() - new Date(r.last_seen) < 3600e3).map(r => r.room_id));
+  const open = alerts.filter(a => (a.status === "open" || a.status === "verifying") && recent.has(a.room_id));
+  const offline = rooms.filter(r => !r.online && recent.has(r.room_id));
+  const el = document.getElementById("banner");
+  const items = open.map(a => `<li><b>Phòng ${esc(a.room_id)}</b>: không có người mà còn ${esc(devList(a.devices_on))} bật`
+      + `${a.temperature != null ? ` (nhiệt độ ${fmt(a.temperature, 1)} °C)` : ""} — từ ${new Date(a.started).toLocaleTimeString("vi-VN")}`
+      + `${a.acknowledged_by ? " · đã xác nhận" : ` <button onclick="ack('${esc(a.alert_id)}')">Xác nhận</button>`}</li>`);
+  items.push(...offline.map(r => `<li>Phòng ${esc(r.room_id)}: thiết bị biên mất kết nối (camera/chương trình không gửi dữ liệu)</li>`));
+  el.innerHTML = items.length ? `<b>⚠️ CẢNH BÁO</b><ul>${items.join("")}</ul>` : "";
+  el.classList.toggle("show", items.length > 0);
+  const ids = new Set(open.map(a => a.alert_id));
+  if (knownAlerts) {
+    const fresh = open.filter(a => !knownAlerts.has(a.alert_id));
+    if (fresh.length) notify(fresh);
+  }
+  knownAlerts = ids;
+  document.title = open.length ? `(${open.length}) ⚠️ Quản lý phòng học` : "Quản lý phòng học";
+}
+
+function enableSound() {
+  soundOn = true;
+  audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+  if ("Notification" in window && Notification.permission === "default") Notification.requestPermission();
+  document.getElementById("soundBtn").textContent = "🔔 Âm báo: bật";
+  beep();
+}
+
+function beep() {
+  if (!soundOn || !audioCtx) return;
+  [0, 0.35, 0.7].forEach(t => {
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.frequency.value = 880; g.gain.value = 0.2;
+    o.connect(g); g.connect(audioCtx.destination);
+    o.start(audioCtx.currentTime + t); o.stop(audioCtx.currentTime + t + 0.2);
+  });
+}
+
+function notify(fresh) {
+  beep();
+  if ("Notification" in window && Notification.permission === "granted")
+    fresh.forEach(a => new Notification(`Phòng ${a.room_id}: bỏ quên thiết bị`, {body: `Không có người 2 phút, còn bật: ${devList(a.devices_on)}`}));
+}
+
+function updateRoomSelect(rooms) {
+  const ids = rooms.filter(r => r.sensors).map(r => r.room_id);
+  if (ids.join() === roomIds.join()) return;
+  roomIds = ids;
+  const sel = document.getElementById("roomSel"), cur = sel.value;
+  sel.innerHTML = ids.map(i => `<option>${esc(i)}</option>`).join("");
+  if (ids.includes(cur)) sel.value = cur;
+  loadSensors();
+}
+
+async function loadSensors() {
+  const room = document.getElementById("roomSel").value;
+  if (!room || !window.Chart) return;
+  const rows = await fetch(`/api/sensors?room_id=${encodeURIComponent(room)}&minutes=120`).then(r => r.json());
+  const labels = rows.map(r => new Date(r.time).toLocaleTimeString("vi-VN", {hour: "2-digit", minute: "2-digit"}));
+  const t = rows.map(r => r.temperature), h = rows.map(r => r.humidity);
+  const grid = css("--line"), text = css("--muted");
+  if (!tempChart) {
+    tempChart = new Chart(document.getElementById("tempChart"), {type: "line",
+      data: {labels, datasets: [
+        {label: "Nhiệt độ (°C)", data: t, borderColor: css("--alert"), yAxisID: "t", pointRadius: 0, tension: .3},
+        {label: "Độ ẩm (%)", data: h, borderColor: css("--occ"), yAxisID: "h", pointRadius: 0, tension: .3},
+        {label: "Ngưỡng 30 °C", data: t.map(() => 30), borderColor: css("--pend"), borderDash: [6, 4], yAxisID: "t", pointRadius: 0}]},
+      options: {responsive: true, maintainAspectRatio: false, animation: false, interaction: {mode: "index", intersect: false},
+        plugins: {legend: {labels: {color: text}}},
+        scales: {x: {grid: {display: false}, ticks: {color: text, maxTicksLimit: 12}},
+                 t: {position: "left", grid: {color: grid}, ticks: {color: text}},
+                 h: {position: "right", grid: {display: false}, ticks: {color: text}}}}});
+  } else {
+    tempChart.data.labels = labels;
+    tempChart.data.datasets[0].data = t; tempChart.data.datasets[1].data = h;
+    tempChart.data.datasets[2].data = t.map(() => 30);
+    tempChart.update();
+  }
 }
 
 function renderAlerts(alerts) {
@@ -139,7 +261,8 @@ function renderAlerts(alerts) {
     <td>${a.has_evidence ? `<img class="thumb" loading="lazy" src="/api/alerts/${encodeURIComponent(a.alert_id)}/evidence" onclick="zoom(this.src)" alt="bằng chứng">` : "—"}</td>
     <td>${esc(a.room_id)}<div class="muted">${a.in_class ? "Trong giờ: " + esc(a.course || "") : "Ngoài giờ học"}</div></td>
     <td>${new Date(a.started).toLocaleString("vi-VN")}</td>
-    <td>${esc(a.devices_on.join(", "))}</td>
+    <td>${esc(devList(a.devices_on))}</td>
+    <td class="num">${a.temperature != null ? fmt(a.temperature, 1) + " °C" : "—"}</td>
     <td><span class="badge ${a.status}">${STATUS_VI[a.status] || a.status}</span>
         <div class="muted">${esc(REASON_VI[a.close_reason] || "")}${a.acknowledged_by ? " · đã xác nhận" : ""}</div></td>
     <td class="num">${fmt(a.duration_min, 1)}</td>
@@ -147,7 +270,7 @@ function renderAlerts(alerts) {
     <td class="num">${fmt(a.cost_vnd)}</td>
     <td class="muted" style="max-width:240px">${a.verified === null ? "không dùng" : a.verified ? "✔ phòng trống" : "✘ còn người"}${a.verify_note ? "<br>" + esc(a.verify_note.slice(0, 120)) : ""}</td>
     <td>${a.status === "open" && !a.acknowledged_by ? `<button onclick="ack('${esc(a.alert_id)}')">Xác nhận</button>` : ""}</td>
-  </tr>`).join("") || `<tr><td colspan="10" class="muted">Chưa có cảnh báo.</td></tr>`;
+  </tr>`).join("") || `<tr><td colspan="11" class="muted">Chưa có cảnh báo.</td></tr>`;
 }
 
 function renderCharts(st) {
@@ -170,7 +293,8 @@ function zoom(src) { document.getElementById("dlgimg").src = src; document.getEl
 async function ack(id) { await fetch(`/api/alerts/${encodeURIComponent(id)}/ack?who=dashboard`, {method: "POST"}); load(); }
 
 load();
-setInterval(load, 5000);
+setInterval(load, 2000);
+setInterval(loadSensors, 30000);
 </script>
 </body>
 </html>

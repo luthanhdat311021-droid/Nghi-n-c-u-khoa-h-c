@@ -16,6 +16,11 @@ STATE_VI = {
     "OCCUPIED": "Có người", "EMPTY_PENDING": "Nghi vắng", "ALERT": "BỎ QUÊN THIẾT BỊ",
     "RESOLVED": "Đã xử lý", "EMPTY_SAFE": "Trống – an toàn", None: "Chưa rõ",
 }
+DEVICE_VI = {"lights": "đèn", "fans": "quạt", "ac": "máy lạnh (nhiệt độ < 30 °C)"}
+
+
+def devices_vi(ids) -> str:
+    return ", ".join(DEVICE_VI.get(d, d) for d in ids)
 
 
 class TelegramBot:

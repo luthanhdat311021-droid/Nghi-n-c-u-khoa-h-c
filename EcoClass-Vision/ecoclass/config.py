@@ -39,7 +39,7 @@ class FSMConfig:
 @dataclass
 class DeviceConfig:
     id: str
-    type: str                       # light | fan | screen | ac | monitor
+    type: str                       # light | fan | screen | ac | ac_temp | monitor
     roi: list[float]                # [x1, y1, x2, y2] chuẩn hoá
     power_w: float = 0.0
     ref_roi: list[float] | None = None   # vùng nền để tính tỉ số độ sáng
@@ -58,6 +58,17 @@ class PublisherConfig:
     topic_prefix: str = "ecoclass"
     heartbeat_seconds: float = 10.0
     api_key: str | None = None
+    frame_fps: float = 0.0          # gửi ảnh xem trực tiếp (người đã làm mờ) lên dashboard; 0 = tắt (chỉ http)
+    frame_width: int = 640
+
+
+@dataclass
+class SensorConfig:
+    """ESP32 + DHT11 cắm cổng USB (ecoclass/edge/esp32.py)."""
+    enabled: bool = False
+    port: str = "auto"              # "auto" = tự tìm mạch CH340/CP210x, hoặc "COM5"
+    baud: int = 115200
+    stale_seconds: float = 10.0     # quá lâu không có số liệu → coi như mất cảm biến
 
 
 @dataclass
@@ -69,6 +80,8 @@ class RoomConfig:
     capture_height: int | None = None
     display_scale: float = 1.0           # phóng to cửa sổ gỡ lỗi (2.0 cho webcam 640x480)
     flip: str | None = None              # horizontal | vertical | both — lật ảnh ngay khi thu nhận
+    rotate: int | None = None            # 90 | 180 | 270 — xoay theo chiều kim đồng hồ (điện thoại cầm dọc)
+    max_side: int | None = None          # thu nhỏ ảnh để cạnh dài <= max_side (vd 640) ngay khi thu nhận
     device_model: str | None = None      # YOLO đã huấn luyện (lớp light, fan) để định vị thiết bị
     device_conf: float = 0.25
     timetable: str | None = None
@@ -77,6 +90,7 @@ class RoomConfig:
     fsm: FSMConfig = field(default_factory=FSMConfig)
     devices: list[DeviceConfig] = field(default_factory=list)
     publisher: PublisherConfig = field(default_factory=PublisherConfig)
+    sensor: SensorConfig = field(default_factory=SensorConfig)
     evidence_max_width: int = 960
     base_dir: str = "."             # thư mục chứa file YAML (để giải đường dẫn tương đối)
 
@@ -109,6 +123,8 @@ def load_room_config(path: str | Path) -> RoomConfig:
         capture_height=raw.get("capture_height"),
         display_scale=float(raw.get("display_scale", 1.0)),
         flip=raw.get("flip"),
+        rotate=raw.get("rotate"),
+        max_side=raw.get("max_side"),
         device_model=raw.get("device_model"),
         device_conf=float(raw.get("device_conf", 0.25)),
         timetable=raw.get("timetable"),
@@ -117,6 +133,7 @@ def load_room_config(path: str | Path) -> RoomConfig:
         fsm=FSMConfig(**raw.get("fsm", {})),
         devices=[DeviceConfig(**d) for d in raw.get("devices", [])],
         publisher=PublisherConfig(**raw.get("publisher", {})),
+        sensor=SensorConfig(**raw.get("sensor", {})),
         evidence_max_width=int(raw.get("evidence_max_width", 960)),
         base_dir=str(path.parent.resolve()),
     )
