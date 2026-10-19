@@ -180,6 +180,7 @@ def _notify_alert(a: Alert) -> bool:
                f"Không có người trong {duration_vi(a.empty_seconds)}. {ctx}\n"
                f"Xác nhận: /ack {a.alert_id}")
     zalo_ok = zalo.send_text(caption)              # Zalo: chỉ gửi chữ (ảnh bằng chứng cần URL công khai)
+    print(f"[notify] {datetime.now():%H:%M:%S.%f}"[:-3] + f" {a.alert_id} zalo={'đã gửi' if zalo_ok else 'không gửi'}")
     jpeg = Path(a.evidence_path).read_bytes() if a.evidence_path and Path(a.evidence_path).exists() else None
     if jpeg:
         return bot.send_photo(caption, jpeg) or zalo_ok

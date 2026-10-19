@@ -301,7 +301,7 @@ function zoom(src) { document.getElementById("dlgimg").src = src; document.getEl
 async function ack(id) { await fetch(`/api/alerts/${encodeURIComponent(id)}/ack?who=dashboard`, {method: "POST"}); load(); }
 
 load();
-setInterval(load, 2000);
+setInterval(load, 500);   // khớp nhịp heartbeat 0,5 s của máy biên → trạng thái phòng gần thời gian thực
 setInterval(loadSensors, 30000);
 </script>
 </body>

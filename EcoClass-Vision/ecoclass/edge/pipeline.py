@@ -274,7 +274,7 @@ def run(
             out["fps"] = pipe.fps = 1.0 / dt_ema
             for ev in out["events"]:
                 extra = f" waste={ev.waste_wh:.2f}Wh reason={ev.reason}" if ev.type != "state_change" else f" ({ev.reason})"
-                print(f"[{datetime.fromtimestamp(ev.ts):%H:%M:%S}] {ev.type:13s} {ev.state_from} -> {ev.state_to}"
+                print(f"[{datetime.fromtimestamp(ev.ts).strftime('%H:%M:%S.%f')[:-3]}] {ev.type:13s} {ev.state_from} -> {ev.state_to}"
                       f" N={ev.people} on={ev.devices_on}{extra}")
             if show or save_video:
                 dbg = pipe.render_debug(fr.image, out, scale=cfg.display_scale)

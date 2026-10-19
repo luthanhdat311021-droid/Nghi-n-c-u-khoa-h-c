@@ -32,11 +32,13 @@ person:
   stride: 2                     # YOLO chạy 15 lần/s (cách 1 khung), đèn/quạt vẫn xử lý đủ 30 fps
   conf_occupied: 0.25
   conf_empty: 0.40
-  hold_seconds: 3
-  window: 15                    # trung vị 1 s (15 lần chạy YOLO/s khi stride = 2)
+  # Sát thời gian thực: đồng hồ "phòng trống" tính từ lúc thấy người lần cuối, hai lớp giữ dưới đây làm lùi mốc đó.
+  # te_seconds đã đủ chống báo nhầm khi YOLO lỡ mất người chốc lát → giữ rất ngắn. (Bản chính thức: 3 và 15.)
+  hold_seconds: 0.3             # giữ người vừa khuất 0,3 s
+  window: 3                     # trung vị 3 lần chạy YOLO (0,2 s khi stride = 2)
 
 fsm:
-  empty_seconds_to_pending: 3   # N=0 liên tục 3 s → bắt đầu đếm "phòng trống" (tính từ lúc thấy người lần cuối)
+  empty_seconds_to_pending: 1   # N=0 liên tục 1 s → chuyển "nghi vắng" (tính từ lúc thấy người lần cuối)
   te_seconds: 3                 # trống 3 giây mà còn thiết bị BẬT → CẢNH BÁO (bản chính thức: 120 = 2 phút)
   te_no_class_seconds: 3
   off_confirm_seconds: 5        # thiết bị TẮT ổn định 5 s → đóng cảnh báo
@@ -49,7 +51,7 @@ sensor:
 publisher:
   mode: http
   http_url: http://127.0.0.1:8000
-  heartbeat_seconds: 2
+  heartbeat_seconds: 0.5        # dashboard cập nhật 2 lần/giây (cảnh báo gửi ngay, không chờ nhịp này)
   frame_fps: 30                 # ảnh xem trực tiếp trên màn hình camera (người đã làm mờ); 0 = tắt
   frame_width: 640
 
