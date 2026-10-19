@@ -481,7 +481,9 @@ class FanAutoDetector(DeviceDetector):
             self.heat = None
             return UNKNOWN, 0.0, {"global_change": round(active, 2), "count": len(self.blobs)}
         a = self.p.get("heat_alpha", 0.3)
-        self.heat = act if self.heat is None else (1 - a) * self.heat + a * act
+        # Bắt đầu từ 0 rồi tích luỹ dần: khởi tạo bằng act làm mọi chuyển động của khung đầu (người cử động)
+        # vượt heat_on ngay → báo quạt BẬT giả lúc khởi động / sau mỗi lần xoá bộ đệm.
+        self.heat = a * act if self.heat is None else (1 - a) * self.heat + a * act
         m = (self.heat >= self.p.get("heat_on", 0.5)).astype(np.uint8)
 
         if scene.device_boxes is not None and "fan" in scene.device_boxes:
@@ -514,6 +516,9 @@ class FanAutoDetector(DeviceDetector):
                 continue
             # Vùng quét cánh quạt khá cân đối; dải dài-mảnh thường là mép người/cửa cử động.
             if max(bw, bh) / float(max(1, min(bw, bh))) > self.p.get("max_aspect", 3.0):
+                continue
+            # Chạm mép dưới khung: thường là người bị cắt dở (YOLO không nhận ra) đi vào/ra; quạt ở trần/tường.
+            if self.p.get("reject_bottom_edge", False) and y + bh >= m.shape[0] - 1:
                 continue
             blobs.append([round(x / m.shape[1], 4), round(y / m.shape[0], 4),
                           round((x + bw) / m.shape[1], 4), round((y + bh) / m.shape[0], 4)])
@@ -640,13 +645,15 @@ class ROIClassifier:
                 continue
             # FP32 (FP16 lệch xác suất tới ~0,04 so với bản ONNX và không nhanh hơn với mạng nhỏ này).
             self.gpu_model = m.cuda().eval()
-            mean = torch.tensor(self.MEAN, device="cuda").view(1, 3, 1, 1)
-            std = torch.tensor(self.STD, device="cuda").view(1, 3, 1, 1)
+            # Mọi tensor mà CUDA Graph đọc phải sống cùng đối tượng: biến cục bộ bị giải phóng sau __init__,
+            # bộ phân lớp tạo sau cấp lại đúng vùng nhớ đó → graph đọc phải dữ liệu rác (đèn 0,77 → 0,38).
+            self._mean = torch.tensor(self.MEAN, device="cuda").view(1, 3, 1, 1)
+            self._std = torch.tensor(self.STD, device="cuda").view(1, 3, 1, 1)
             w, h = self.size
             self._u8 = torch.zeros((h, w, 3), dtype=torch.uint8, device="cuda")   # ảnh RGB đầu vào cố định
 
             def forward():
-                x = (self._u8.permute(2, 0, 1)[None].float() / 255 - mean) / std
+                x = (self._u8.permute(2, 0, 1)[None].float() / 255 - self._mean) / self._std
                 return torch.softmax(self.gpu_model(x)[0], 0)[1]
 
             # CUDA Graph: gửi cả mạng xuống GPU một lần (~1 ms) thay vì hàng trăm lệnh nhỏ từ Python (~7 ms).

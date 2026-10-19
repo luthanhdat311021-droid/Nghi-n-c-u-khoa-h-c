@@ -64,16 +64,19 @@ devices:
     on_frames: 15               # 0,5 s
     off_frames: 30              # 1 s
     params: {cls_size: [384, 224]}
+  # Quạt: dò theo luật "fan_auto" (vùng độ sáng dao động liên tục do cánh quay, loại người + đèn sáng),
+  # không phụ thuộc góc camera. Bộ phân lớp fan_scene_mnv3 (huấn luyện trên phòng khác) cho p_on ≈ 0,6
+  # ngay cả trên ảnh đứng yên không có quạt → không dùng được với camera này.
+  # Tham số theo room_webcam.yaml (20 fps) nhân 1,5 cho 30 fps.
   - id: fans
-    type: fan
+    type: fan_auto
     roi: [0.0, 0.0, 1.0, 1.0]
-    classifier: ../models/fan_scene_mnv3.onnx
     power_w: 60
-    on_frames: 15
-    off_frames: 30
-    # cls_dt tính bằng giây, không đổi. occlusion_max: người chiếm > 5% khung → bỏ kết quả BẬT
-    # (người cử động bị nhầm thành cánh quạt quay), giữ trạng thái cũ; cảnh báo chỉ xét lúc phòng trống.
-    params: {cls_input: tstack, cls_size: [384, 224], cls_dt: 0.1, occlusion_max: 0.05}
+    on_frames: 30                   # dao động liên tục 1 s mới là quạt quay (người cử động thì ngắt quãng)
+    off_frames: 48                  # quạt tắt quay chậm dần → chờ ~1,6 s mới kết luận TẮT
+    # reject_bottom_edge: bỏ vùng chạm mép dưới khung (người bị cắt dở đi vào/ra; quạt ở trần/tường)
+    params: {per_fan_w: 60, window: 24, min_frames: 15, tstd_pix: 4.0, heat_alpha: 0.055, heat_on: 0.5,
+             min_area: 0.004, max_aspect: 3.0, reject_bottom_edge: true}
   - id: ac
     type: ac_temp
     roi: [0.0, 0.0, 1.0, 1.0]   # không dùng (đo bằng cảm biến)
