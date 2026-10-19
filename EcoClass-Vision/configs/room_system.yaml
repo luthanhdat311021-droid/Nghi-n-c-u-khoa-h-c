@@ -29,10 +29,11 @@ person:
   imgsz: 640
   device: "0"
   half: true                    # FP16 trên GPU NVIDIA → nhanh hơn
+  stride: 2                     # YOLO chạy 15 lần/s (cách 1 khung), đèn/quạt vẫn xử lý đủ 30 fps
   conf_occupied: 0.25
   conf_empty: 0.40
   hold_seconds: 3
-  window: 30                    # trung vị 1 s
+  window: 15                    # trung vị 1 s (15 lần chạy YOLO/s khi stride = 2)
 
 fsm:
   empty_seconds_to_pending: 3   # N=0 liên tục 3 s → bắt đầu đếm "phòng trống" (tính từ lúc thấy người lần cuối)
@@ -68,7 +69,9 @@ devices:
     power_w: 60
     on_frames: 15
     off_frames: 30
-    params: {cls_input: tstack, cls_size: [384, 224], cls_dt: 0.1}   # cls_dt tính bằng giây, không đổi
+    # cls_dt tính bằng giây, không đổi. occlusion_max: người chiếm > 5% khung → bỏ kết quả BẬT
+    # (người cử động bị nhầm thành cánh quạt quay), giữ trạng thái cũ; cảnh báo chỉ xét lúc phòng trống.
+    params: {cls_input: tstack, cls_size: [384, 224], cls_dt: 0.1, occlusion_max: 0.05}
   - id: ac
     type: ac_temp
     roi: [0.0, 0.0, 1.0, 1.0]   # không dùng (đo bằng cảm biến)

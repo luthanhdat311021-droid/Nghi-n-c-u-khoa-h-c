@@ -26,6 +26,7 @@ class PersonConfig:
     window: int = 5                # cửa sổ trượt làm trơn N(t)
     device: str | None = None      # "cpu", "0", ... (None = tự chọn)
     half: bool = False             # FP16 trên GPU NVIDIA → nhanh hơn
+    stride: int = 1                # chạy YOLO mỗi `stride` khung, khung xen giữa dùng lại kết quả (giữ 30 fps)
 
 
 @dataclass

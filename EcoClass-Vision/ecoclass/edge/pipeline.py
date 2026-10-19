@@ -261,15 +261,17 @@ def run(
     pipe = EdgePipeline(cfg, publisher, use_tracker=use_tracker, temporal=temporal, frame_log=frame_log)
     writer = None
     n, t_start = 0, time.time()
-    t_prev, fps_ema = time.time(), None
+    t_prev, dt_ema = time.time(), None
     try:
         for fr in itertools.chain([first], frames):
             out = pipe.process(fr.image, fr.ts)
             now = time.time()
-            inst = 1.0 / max(now - t_prev, 1e-6)
-            fps_ema = inst if fps_ema is None else 0.9 * fps_ema + 0.1 * inst
+            # Trung bình khoảng thời gian giữa hai khung (không trung bình 1/dt: khung nhanh/chậm xen kẽ
+            # khi YOLO chạy cách khung sẽ làm FPS hiển thị cao hơn thực tế).
+            dt = max(now - t_prev, 1e-6)
+            dt_ema = dt if dt_ema is None else 0.95 * dt_ema + 0.05 * dt
             t_prev = now
-            out["fps"] = pipe.fps = fps_ema
+            out["fps"] = pipe.fps = 1.0 / dt_ema
             for ev in out["events"]:
                 extra = f" waste={ev.waste_wh:.2f}Wh reason={ev.reason}" if ev.type != "state_change" else f" ({ev.reason})"
                 print(f"[{datetime.fromtimestamp(ev.ts):%H:%M:%S}] {ev.type:13s} {ev.state_from} -> {ev.state_to}"

@@ -98,6 +98,9 @@ class DeviceDetector:
     def __init__(self, cfg: DeviceConfig):
         self.cfg = cfg
         self.p = cfg.params
+        # Ghi đè ngưỡng che khuất theo cấu hình (vd quạt dùng bộ phân lớp toàn khung: người chiếm > 5% khung
+        # đã đủ tạo chuyển động giả → bỏ kết quả BẬT)
+        self.occlusion_max = float(self.p.get("occlusion_max", type(self).occlusion_max))
         self.state = UNKNOWN
         self._streak_state = UNKNOWN
         self._streak = 0
@@ -593,6 +596,8 @@ class ROIClassifier:
     """Bộ phân lớp nhị phân MobileNetV3 trên ROI (lớp 0 = off, 1 = on).
 
     Hỗ trợ .onnx (onnxruntime — khuyến nghị trên Raspberry Pi) và .pt (TorchScript).
+    Có GPU NVIDIA và có file trọng số .pth cùng tên cạnh .onnx → chạy MobileNetV3 bằng PyTorch trên GPU
+    (~1 ms thay vì ~30 ms trên CPU; onnxruntime CPU còn chiếm hết nhân làm YOLO chậm theo).
     """
 
     MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
@@ -602,15 +607,61 @@ class ROIClassifier:
         # size: cạnh ảnh vuông, hoặc [rộng, cao] (bộ phân lớp toàn khung: [384, 224])
         self.size = (size, size) if isinstance(size, int) else (int(size[0]), int(size[1]))
         self.path = path
+        self.sess = self.torch_model = self.gpu_model = None
+        if path.endswith(".onnx") and self._load_gpu(path[:-5] + ".pth"):
+            return
         if path.endswith(".onnx"):
             import onnxruntime as ort
-            self.sess = ort.InferenceSession(path, providers=["CPUExecutionProvider"])
+            so = ort.SessionOptions()
+            so.intra_op_num_threads = 2                      # chừa nhân CPU cho YOLO/camera
+            so.add_session_config_entry("session.intra_op.allow_spinning", "0")
+            self.sess = ort.InferenceSession(path, so, providers=["CPUExecutionProvider"])
             self.input = self.sess.get_inputs()[0].name
-            self.torch_model = None
         else:
             import torch
             self.torch_model = torch.jit.load(path, map_location="cpu").eval()
-            self.sess = None
+
+    def _load_gpu(self, pth: str) -> bool:
+        import os
+        if not os.path.exists(pth):
+            return False
+        import torch
+        if not torch.cuda.is_available():
+            return False
+        from torch import nn
+        from torchvision import models
+        sd = torch.load(pth, map_location="cpu")
+        for build in (models.mobilenet_v3_small, models.mobilenet_v3_large):   # kiến trúc theo train_scene_cls.py
+            m = build()
+            m.classifier[3] = nn.Linear(m.classifier[3].in_features, 2)
+            try:
+                m.load_state_dict(sd)
+            except RuntimeError:
+                continue
+            # FP32 (FP16 lệch xác suất tới ~0,04 so với bản ONNX và không nhanh hơn với mạng nhỏ này).
+            self.gpu_model = m.cuda().eval()
+            mean = torch.tensor(self.MEAN, device="cuda").view(1, 3, 1, 1)
+            std = torch.tensor(self.STD, device="cuda").view(1, 3, 1, 1)
+            w, h = self.size
+            self._u8 = torch.zeros((h, w, 3), dtype=torch.uint8, device="cuda")   # ảnh RGB đầu vào cố định
+
+            def forward():
+                x = (self._u8.permute(2, 0, 1)[None].float() / 255 - mean) / std
+                return torch.softmax(self.gpu_model(x)[0], 0)[1]
+
+            # CUDA Graph: gửi cả mạng xuống GPU một lần (~1 ms) thay vì hàng trăm lệnh nhỏ từ Python (~7 ms).
+            with torch.inference_mode():
+                s = torch.cuda.Stream()
+                s.wait_stream(torch.cuda.current_stream())
+                with torch.cuda.stream(s):
+                    for _ in range(3):
+                        forward()
+                torch.cuda.current_stream().wait_stream(s)
+                self._graph = torch.cuda.CUDAGraph()
+                with torch.cuda.graph(self._graph):
+                    self._p_on = forward()
+            return True
+        return False
 
     def preprocess(self, roi_bgr: np.ndarray) -> np.ndarray:
         img = cv2.resize(roi_bgr, self.size, interpolation=cv2.INTER_AREA)
@@ -619,6 +670,13 @@ class ROIClassifier:
         return img.transpose(2, 0, 1)[None].astype(np.float32)
 
     def prob_on(self, roi_bgr: np.ndarray) -> float:
+        if self.gpu_model is not None:
+            import torch
+            img = cv2.cvtColor(cv2.resize(roi_bgr, self.size, interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2RGB)
+            with torch.inference_mode():
+                self._u8.copy_(torch.from_numpy(img))
+                self._graph.replay()
+                return float(self._p_on)
         x = self.preprocess(roi_bgr)
         if self.sess is not None:
             logits = self.sess.run(None, {self.input: x})[0][0]

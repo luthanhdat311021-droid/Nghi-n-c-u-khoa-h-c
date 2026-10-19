@@ -44,6 +44,7 @@ class FrameSource:
         self.t0 = time.time() if t0 is None else t0
         self.realtime = realtime
         self._latest: tuple[np.ndarray, float] | None = None
+        self._new_frame = threading.Event()   # luồng đọc báo có khung mới → vòng chính lấy ngay, không lệch pha
         self._stop = threading.Event()
         self._cap: cv2.VideoCapture | None = None
 
@@ -134,6 +135,7 @@ class FrameSource:
                     if not ok:
                         break
                     self._latest = (img, time.time())
+                    self._new_frame.set()
             except RuntimeError as e:
                 print(f"[capture] {e}; thử lại sau {backoff:.0f}s")
             if self._cap is not None:
@@ -147,13 +149,22 @@ class FrameSource:
         period = 1.0 / self.fps
         idx = 0
         last_ts = None
+        last_yield = 0.0
         try:
             while True:
-                tick = time.time()
-                if self._latest is not None and self._latest[1] != last_ts:
-                    img, last_ts = self._latest
-                    yield Frame(img.copy(), last_ts, idx)
-                    idx += 1
-                time.sleep(max(0.0, period - (time.time() - tick)))
+                # Chờ khung mới thay vì ngủ cố định 1/fps: ngủ cố định lệch pha với nhịp camera → khung mới
+                # đến ngay sau lúc kiểm tra phải chờ thêm cả chu kỳ (webcam 30 fps chỉ còn ~20 fps).
+                if not self._new_frame.wait(timeout=1.0):
+                    continue
+                self._new_frame.clear()
+                if self._latest is None or self._latest[1] == last_ts:
+                    continue
+                # Giới hạn tần số xử lý theo cấu hình (dung sai 20%: khung camera đến lệch nhịp vài ms).
+                if self._latest[1] - last_yield < 0.8 * period:
+                    continue
+                img, last_ts = self._latest
+                last_yield = last_ts
+                yield Frame(img.copy(), last_ts, idx)
+                idx += 1
         finally:
             self._stop.set()

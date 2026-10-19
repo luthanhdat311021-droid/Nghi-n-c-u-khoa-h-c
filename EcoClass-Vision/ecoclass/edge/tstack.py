@@ -41,7 +41,7 @@ def make_tstack(g2: np.ndarray, g1: np.ndarray, g0: np.ndarray, person_mask: np.
     st = np.dstack([_align(g2, g0, w), _align(g1, g0, w), g0])
     if person_mask is not None and person_mask.any():
         m = cv2.resize(person_mask.astype(np.uint8), key, interpolation=cv2.INTER_NEAREST)
-        m = cv2.dilate(m, np.ones((7, 7), np.uint8)).astype(bool)
+        m = cv2.dilate(m, np.ones((15, 15), np.uint8)).astype(bool)   # nới rộng: xoá cả chuyển động ở mép tóc/vai
         st[m] = g0[m][:, None]
     return st
 

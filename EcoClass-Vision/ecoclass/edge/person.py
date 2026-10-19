@@ -43,8 +43,20 @@ class PersonCounter:
         # Lớp "person": mô hình COCO gốc là 0; mô hình tinh chỉnh trên dữ liệu phòng học cũng đặt 0.
         names = self.model.names
         self.person_cls = next((k for k, v in names.items() if v == "person"), PERSON_CLASS)
+        self._frame_i = 0
+        self._last: PersonResult | None = None
 
     def update(self, frame: np.ndarray, ts: float, occupied: bool) -> PersonResult:
+        # stride > 1: YOLO (~20 ms) chỉ chạy cách khung; người không đổi đáng kể trong 1/15 s và N(t)
+        # đã lấy trung vị cả cửa sổ → khung xen giữa dùng lại kết quả gần nhất.
+        skip = self._last is not None and self._frame_i % max(1, self.cfg.stride) != 0
+        self._frame_i += 1
+        if skip:
+            return self._last
+        self._last = self._detect(frame, ts, occupied)
+        return self._last
+
+    def _detect(self, frame: np.ndarray, ts: float, occupied: bool) -> PersonResult:
         thr = self.cfg.conf_occupied if occupied else self.cfg.conf_empty
         kw = dict(imgsz=self.cfg.imgsz, classes=[self.person_cls], verbose=False)
         if self.cfg.device is not None:
