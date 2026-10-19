@@ -37,6 +37,12 @@ class Settings:
     telegram_chat_ids: list[str] = field(
         default_factory=lambda: [c.strip() for c in os.getenv("TELEGRAM_CHAT_IDS", "").split(",") if c.strip()]
     )
+    # Bot Zalo (Zalo Bot Platform): token lấy ở https://bot.zaloplatforms.com; mã chat: nhắn bot một tin bất kỳ
+    zalo_token: str | None = os.getenv("ZALO_BOT_TOKEN") or None
+    zalo_chat_ids: list[str] = field(
+        default_factory=lambda: [c.strip() for c in os.getenv("ZALO_CHAT_IDS", "").split(",") if c.strip()]
+    )
+    zalo_api_base: str = os.getenv("ZALO_API_BASE", "https://bot-api.zaloplatforms.com")
     public_url: str = os.getenv("PUBLIC_URL", "http://127.0.0.1:8000")
 
 

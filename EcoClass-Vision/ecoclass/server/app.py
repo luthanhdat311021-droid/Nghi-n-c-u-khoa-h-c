@@ -28,6 +28,7 @@ from ..timetable import Timetable
 from .db import Alert, Event, Room, SensorLog, SessionLocal
 from .settings import settings
 from .telegram_bot import STATE_VI, TelegramBot, devices_vi
+from .zalo_bot import ZaloBot
 from .verifier import make_verifier
 
 STATIC = Path(__file__).parent / "static"
@@ -166,11 +167,12 @@ def _notify_alert(a: Alert) -> bool:
                f"Thời điểm: {a.started:%H:%M %d/%m/%Y}\nThiết bị đang bật: {html.escape(devices)} (~{kw:.2f} kW)\n{temp}"
                f"Không có người trong {a.empty_seconds / 60:.0f} phút. {ctx}\n"
                f"Xác nhận: /ack {a.alert_id}")
+    zalo_ok = zalo.send_text(caption)              # Zalo: chỉ gửi chữ (ảnh bằng chứng cần URL công khai)
     jpeg = Path(a.evidence_path).read_bytes() if a.evidence_path and Path(a.evidence_path).exists() else None
     if jpeg:
-        return bot.send_photo(caption, jpeg)
+        return bot.send_photo(caption, jpeg) or zalo_ok
     bot.send_text(caption)
-    return bot.enabled
+    return bot.enabled or zalo_ok
 
 
 # ------------------------------------------------------------------ Telegram commands
@@ -204,16 +206,18 @@ def _cmd_stats(arg: str, cid: str) -> str:
 
 
 def _cmd_ack(arg: str, cid: str) -> str:
-    return ack_alert(arg, f"telegram:{cid}")
+    return ack_alert(arg, cid if cid.startswith("zalo:") else f"telegram:{cid}")
 
 
-bot = TelegramBot(settings.telegram_token, settings.telegram_chat_ids,
-                  {"status": _cmd_status, "alerts": _cmd_alerts, "stats": _cmd_stats, "ack": _cmd_ack, "start": _cmd_status})
+COMMANDS = {"status": _cmd_status, "alerts": _cmd_alerts, "stats": _cmd_stats, "ack": _cmd_ack, "start": _cmd_status}
+bot = TelegramBot(settings.telegram_token, settings.telegram_chat_ids, COMMANDS)
+zalo = ZaloBot(settings.zalo_token, settings.zalo_chat_ids, COMMANDS, api_base=settings.zalo_api_base)
 
 
 @app.on_event("startup")
 def _startup() -> None:
     bot.start_polling()
+    zalo.start_polling()
     if settings.mqtt_host:
         from .mqtt_bridge import start_mqtt_bridge
         start_mqtt_bridge(settings.mqtt_host, settings.mqtt_port, settings.mqtt_prefix, handle_state, handle_event,
@@ -409,4 +413,4 @@ def cameras_page():
 
 @app.get("/healthz")
 def healthz():
-    return {"ok": True, "vlm": settings.vlm, "telegram": bot.enabled, "mqtt": bool(settings.mqtt_host)}
+    return {"ok": True, "vlm": settings.vlm, "telegram": bot.enabled, "zalo": zalo.enabled, "mqtt": bool(settings.mqtt_host)}
