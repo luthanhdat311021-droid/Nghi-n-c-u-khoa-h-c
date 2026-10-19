@@ -1,6 +1,6 @@
 # HỆ THỐNG QUẢN LÝ PHÒNG HỌC — vận hành liên tục: camera (thị giác máy tính) + ESP32 (nhiệt độ).
 #
-# Luật cảnh báo: KHÔNG CÓ NGƯỜI liên tục 2 phút mà còn ít nhất một trong:
+# Luật cảnh báo: KHÔNG CÓ NGƯỜI liên tục te_seconds (đang đặt 3 giây) mà còn ít nhất một trong:
 #   - đèn BẬT  (bộ phân lớp MobileNetV3 trên ảnh camera)
 #   - quạt BẬT (bộ phân lớp ảnh chồng thời gian, cần >= 10 fps)
 #   - nhiệt độ phòng < 30 °C (ESP32 + DHT11 → coi như máy lạnh đang chạy)
@@ -37,8 +37,8 @@ person:
 
 fsm:
   empty_seconds_to_pending: 3   # N=0 liên tục 3 s → bắt đầu đếm "phòng trống" (tính từ lúc thấy người lần cuối)
-  te_seconds: 120               # trống 2 phút mà còn thiết bị BẬT → CẢNH BÁO
-  te_no_class_seconds: 120
+  te_seconds: 3                 # trống 3 giây mà còn thiết bị BẬT → CẢNH BÁO (bản chính thức: 120 = 2 phút)
+  te_no_class_seconds: 3
   off_confirm_seconds: 5        # thiết bị TẮT ổn định 5 s → đóng cảnh báo
 
 sensor:

@@ -41,6 +41,16 @@ SENSOR_LOG_SECONDS = 30.0          # ghi lịch sử nhiệt độ thưa để C
 OFFLINE_SECONDS = 30.0             # quá lâu không nhận heartbeat → thiết bị biên mất kết nối
 _last_sensor_log: dict[str, float] = {}
 _frames: dict[str, tuple[bytes, float]] = {}   # room_id → (JPEG mới nhất, thời điểm nhận)
+_te: dict[str, float] = {}                      # room_id → thời gian chờ cảnh báo (s) mà máy biên đang dùng
+
+
+def duration_vi(seconds: float) -> str:
+    """3 → "3 giây", 120 → "2 phút", 150 → "2 phút 30 giây"."""
+    s = int(round(seconds))
+    if s < 60:
+        return f"{s} giây"
+    m, s = divmod(s, 60)
+    return f"{m} phút" + (f" {s} giây" if s else "")
 
 
 def check_key(x_api_key: str | None = Header(default=None)) -> None:
@@ -54,6 +64,8 @@ def _dt(ts: float) -> datetime:
 
 # ------------------------------------------------------------------ ingest
 def handle_state(p: dict) -> None:
+    if p.get("te_seconds") is not None:
+        _te[p["room_id"]] = float(p["te_seconds"])
     with SessionLocal() as s:
         room = s.get(Room, p["room_id"]) or Room(room_id=p["room_id"])
         room.state = p.get("state")
@@ -165,7 +177,7 @@ def _notify_alert(a: Alert) -> bool:
     temp = f"Nhiệt độ phòng: {a.temperature:.1f} °C\n" if a.temperature is not None else ""
     caption = (f"⚠️ <b>Phòng {html.escape(a.room_id)} bị bỏ quên thiết bị điện</b>\n"
                f"Thời điểm: {a.started:%H:%M %d/%m/%Y}\nThiết bị đang bật: {html.escape(devices)} (~{kw:.2f} kW)\n{temp}"
-               f"Không có người trong {a.empty_seconds / 60:.0f} phút. {ctx}\n"
+               f"Không có người trong {duration_vi(a.empty_seconds)}. {ctx}\n"
                f"Xác nhận: /ack {a.alert_id}")
     zalo_ok = zalo.send_text(caption)              # Zalo: chỉ gửi chữ (ảnh bằng chứng cần URL công khai)
     jpeg = Path(a.evidence_path).read_bytes() if a.evidence_path and Path(a.evidence_path).exists() else None
@@ -280,7 +292,7 @@ def rooms():
     return [{
         "room_id": r.room_id, "state": r.state, "state_vi": STATE_VI.get(r.state, r.state), "people": r.people,
         "devices": r.devices, "empty_seconds": r.empty_seconds, "waste_wh_current": r.waste_wh_current,
-        "dark": r.dark, "last_seen": r.last_seen.isoformat() if r.last_seen else None,
+        "dark": r.dark, "te_seconds": _te.get(r.room_id), "last_seen": r.last_seen.isoformat() if r.last_seen else None,
         "online": bool(r.last_seen and (now - r.last_seen).total_seconds() <= OFFLINE_SECONDS),
         "sensors": r.sensors, "fps": r.fps, "open_alert": open_alerts.get(r.room_id),
         "has_frame": r.room_id in _frames and time.time() - _frames[r.room_id][1] <= OFFLINE_SECONDS,

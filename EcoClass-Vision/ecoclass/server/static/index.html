@@ -82,7 +82,7 @@
   <section class="kpis" id="kpis"></section>
   <section class="card">
     <h2>Trạng thái phòng học</h2>
-    <div class="rule">Cảnh báo khi phòng <b>không có người liên tục 2 phút</b> mà còn <b>đèn</b> hoặc <b>quạt</b> bật, hoặc <b>nhiệt độ dưới 30 °C</b> (máy lạnh đang chạy).</div>
+    <div class="rule">Cảnh báo khi phòng <b>không có người liên tục <span id="te-rule">2 phút</span></b> mà còn <b>đèn</b> hoặc <b>quạt</b> bật, hoặc <b>nhiệt độ dưới 30 °C</b> (máy lạnh đang chạy).</div>
     <div class="rooms" id="rooms" style="margin-top:10px"><span class="muted">Chưa có dữ liệu từ thiết bị biên.</span></div>
   </section>
   <section class="card">
@@ -113,7 +113,9 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt
 const DEVICE_VI = {lights: "Đèn", fans: "Quạt", ac: "Máy lạnh"};
 const devName = k => DEVICE_VI[k] || k;
 const devList = ids => (ids || []).map(devName).join(", ");
-const TE_SECONDS = 120;
+const TE_SECONDS = 120;   // mặc định khi máy biên chưa gửi te_seconds
+let teLast = TE_SECONDS;  // thời gian chờ thực tế (phòng gửi gần nhất) — cho dòng luật và thông báo trình duyệt
+function durVi(s) { s = Math.round(s); return s < 60 ? `${s} giây` : `${Math.floor(s / 60)} phút` + (s % 60 ? ` ${s % 60} giây` : ""); }
 let hourChart, roomChart, tempChart, roomIds = [], knownAlerts = null, soundOn = false, audioCtx;
 
 function css(v) { return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
@@ -151,12 +153,18 @@ function mmss(s) { s = Math.max(0, Math.round(s)); return `${Math.floor(s / 60)}
 
 function renderRooms(rooms) {
   if (!rooms.length) return;
+  const live = rooms.find(r => r.online && r.te_seconds);
+  if (live) {
+    teLast = live.te_seconds;
+    document.getElementById("te-rule").textContent = durVi(teLast);
+  }
   document.getElementById("rooms").innerHTML = rooms.map(r => {
     const chips = Object.entries(r.devices || {}).map(([k, v]) => `<span class="chip ${v}">${esc(devName(k))}: ${v === "ON" ? "BẬT" : v === "OFF" ? "tắt" : "?"}</span>`).join("");
     let extra = "";
+    const te = r.te_seconds || TE_SECONDS;
     if (r.state === "EMPTY_PENDING") {
-      const pct = Math.min(100, r.empty_seconds / TE_SECONDS * 100);
-      extra = `<div class="muted">Không có người ${mmss(r.empty_seconds)} / ${mmss(TE_SECONDS)}</div><div class="countdown"><i style="width:${pct}%"></i></div>`;
+      const pct = Math.min(100, r.empty_seconds / te * 100);
+      extra = `<div class="muted">Không có người ${mmss(r.empty_seconds)} / ${mmss(te)}</div><div class="countdown"><i style="width:${pct}%"></i></div>`;
     } else if (r.state === "ALERT") {
       extra = `<div class="muted">Không có người ${mmss(r.empty_seconds)} · lãng phí ${fmt(r.waste_wh_current, 1)} Wh</div>`;
     }
@@ -217,7 +225,7 @@ function beep() {
 function notify(fresh) {
   beep();
   if ("Notification" in window && Notification.permission === "granted")
-    fresh.forEach(a => new Notification(`Phòng ${a.room_id}: bỏ quên thiết bị`, {body: `Không có người 2 phút, còn bật: ${devList(a.devices_on)}`}));
+    fresh.forEach(a => new Notification(`Phòng ${a.room_id}: bỏ quên thiết bị`, {body: `Không có người ${durVi(teLast)}, còn bật: ${devList(a.devices_on)}`}));
 }
 
 function updateRoomSelect(rooms) {
