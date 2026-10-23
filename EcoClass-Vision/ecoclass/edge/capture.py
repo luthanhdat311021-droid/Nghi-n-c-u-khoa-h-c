@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import os
+import re
 import threading
 import time
 from dataclasses import dataclass
@@ -61,6 +62,8 @@ class FrameSource:
         if isinstance(src, int) and os.name == "nt":
             cap = cv2.VideoCapture(src, cv2.CAP_DSHOW)   # MSMF hay lỗi grab với webcam laptop
         elif "://" in str(src):
+            # RTSP qua WiFi: TCP tránh mất gói UDP gây vỡ hình (camera Imou/Dahua).
+            os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
             # Camera mạng: luồng treo (điện thoại đổi cài đặt, mất WiFi) → read() trả False sau 5 s
             # thay vì chờ mãi → _reader tự kết nối lại.
             cap = cv2.VideoCapture(src, cv2.CAP_FFMPEG, [cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 5000,
@@ -78,7 +81,7 @@ class FrameSource:
             print(f"[capture] webcam {int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))}x{int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))}"
                   f" @ {cap.get(cv2.CAP_PROP_FPS):.0f} fps")
         if not cap.isOpened():
-            raise RuntimeError(f"Không mở được nguồn video: {self.source}")
+            raise RuntimeError(f"Không mở được nguồn video: {re.sub(r'//[^/@]*@', '//***@', str(self.source))}")
         return cap
 
     def __iter__(self) -> Iterator[Frame]:

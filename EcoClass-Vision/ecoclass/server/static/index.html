@@ -67,6 +67,9 @@
   .countdown { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin-top: 6px; }
   .countdown i { display: block; height: 100%; background: var(--pend); }
   .rule { color: var(--muted); font-size: 13px; }
+  .acbtn { margin-top: 8px; border-color: var(--alert); color: var(--alert); font-weight: 600; }
+  .acbtn.hot { background: var(--alert); color: #fff; }
+  .banner .acbtn { margin: 0 0 0 6px; background: #fff; color: var(--alert); border-color: #fff; }
 </style>
 </head>
 <body>
@@ -175,11 +178,15 @@ function renderRooms(rooms) {
     const health = `<div class="muted" style="margin-top:6px">
         <span class="dot ${r.online ? "ok" : "bad"}"></span>Camera ${r.online ? "đang chạy" : "MẤT KẾT NỐI"}
         &nbsp; <span class="dot ${s ? (s.sensor_ok ? "ok" : "bad") : ""}"></span>ESP32 ${s ? (s.sensor_ok ? esc(s.sensor_port || "") : "mất kết nối") : "chưa cấu hình"}</div>`;
+    const hasAc = r.devices && "ac" in r.devices;
+    const acHot = r.online && r.state === "ALERT" && r.devices.ac === "ON";
+    const acBtn = hasAc ? `<div><button class="acbtn ${acHot ? "hot" : ""}" onclick="acOff('${esc(r.room_id)}')" ${r.online ? "" : "disabled"}>❄️ Tắt máy lạnh</button>
+        <span class="muted">${acStatus(r.ac_cmd)}</span></div>` : "";
     return `<div class="card room ${r.online ? r.state : ""}">
       <div class="name">${esc(r.room_id)}</div>
       <div class="st">${esc(r.state_vi)}${r.dark ? " · phòng tối" : ""}</div>
       <div class="muted">${r.people} người · ${r.last_seen ? new Date(r.last_seen).toLocaleTimeString("vi-VN") : ""}</div>
-      ${sense}${extra}<div class="chips">${chips}</div>${health}</div>`;
+      ${sense}${extra}<div class="chips">${chips}</div>${acBtn}${health}</div>`;
   }).join("");
 }
 
@@ -191,7 +198,8 @@ function renderBanner(rooms, alerts) {
   const el = document.getElementById("banner");
   const items = open.map(a => `<li><b>Phòng ${esc(a.room_id)}</b>: không có người mà còn ${esc(devList(a.devices_on))} bật`
       + `${a.temperature != null ? ` (nhiệt độ ${fmt(a.temperature, 1)} °C)` : ""} — từ ${new Date(a.started).toLocaleTimeString("vi-VN")}`
-      + `${a.acknowledged_by ? " · đã xác nhận" : ` <button onclick="ack('${esc(a.alert_id)}')">Xác nhận</button>`}</li>`);
+      + `${a.acknowledged_by ? " · đã xác nhận" : ` <button onclick="ack('${esc(a.alert_id)}')">Xác nhận</button>`}`
+      + `${(a.devices_on || []).includes("ac") ? ` <button class="acbtn" onclick="acOff('${esc(a.room_id)}')">❄️ Tắt máy lạnh</button>` : ""}</li>`);
   items.push(...offline.map(r => `<li>Phòng ${esc(r.room_id)}: thiết bị biên mất kết nối (camera/chương trình không gửi dữ liệu)</li>`));
   el.innerHTML = items.length ? `<b>⚠️ CẢNH BÁO</b><ul>${items.join("")}</ul>` : "";
   el.classList.toggle("show", items.length > 0);
@@ -299,6 +307,17 @@ function renderCharts(st) {
 
 function zoom(src) { document.getElementById("dlgimg").src = src; document.getElementById("dlg").showModal(); }
 async function ack(id) { await fetch(`/api/alerts/${encodeURIComponent(id)}/ack?who=dashboard`, {method: "POST"}); load(); }
+async function acOff(room) {
+  if (!confirm(`Tắt máy lạnh phòng ${room}?`)) return;
+  const r = await fetch(`/api/rooms/${encodeURIComponent(room)}/ac_off?who=dashboard`, {method: "POST"}).then(r => r.json());
+  alert(r.message);
+  load();
+}
+function acStatus(c) {
+  if (!c) return "";
+  const t = new Date(c.time).toLocaleTimeString("vi-VN");
+  return {pending: `đang gửi lệnh… (${t})`, sent: `đã phát lệnh tắt lúc ${t}`, failed: `ESP32 chưa kết nối (${t})`}[c.status] || "";
+}
 
 load();
 setInterval(load, 500);   // khớp nhịp heartbeat 0,5 s của máy biên → trạng thái phòng gần thời gian thực

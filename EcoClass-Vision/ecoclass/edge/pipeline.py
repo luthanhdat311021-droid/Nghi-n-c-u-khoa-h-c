@@ -59,6 +59,7 @@ class EdgePipeline:
         self.detectors = {d.id: build_detector(d) for d in cfg.devices}
         self.motion = CameraMotion() if any(d.params.get("track") for d in cfg.devices) else None
         self.locator = None
+        self._dev_boxes, self._dev_i = None, 0
         model = cfg.resolve(cfg.device_model)
         if model:
             if Path(model).exists():
@@ -81,8 +82,28 @@ class EdgePipeline:
         self.frame_log = open(frame_log, "w", encoding="utf-8", buffering=1) if frame_log else None
         self.events: list[dict] = []
         self._last_hb = 0.0
+        self._last_key = None
         self._last_frame = 0.0
         self.fps: float | None = None   # tốc độ xử lý thực tế (run() cập nhật) → gửi kèm heartbeat
+        if publisher is not None:
+            publisher.on_command = self.handle_command
+
+    def handle_command(self, cmd: dict) -> None:
+        """Lệnh từ máy chủ (chạy ở luồng publisher). ``ac_off``: ESP32 phát lệnh tắt máy lạnh của mọi hãng."""
+        if cmd.get("type") != "ac_off":
+            return
+        send = getattr(self.sensor, "send_command", None)
+        ok = bool(send and send("AC_OFF"))
+        if ok:
+            for det in self.detectors.values():
+                if det.cfg.type == "ac_temp":
+                    det.ir_off = True
+        print(f"[edge] lệnh tắt máy lạnh từ {cmd.get('who')}: {'đã gửi xuống ESP32' if ok else 'ESP32 chưa kết nối'}")
+        if self.publisher:
+            self.publisher.publish_event({
+                "room_id": self.cfg.room_id, "ts": time.time(), "type": "ac_command", "state_from": None,
+                "state_to": self.fsm.state.value, "people": 0, "devices": {}, "devices_on": [],
+                "reason": "sent" if ok else "esp32_offline", "command_id": cmd.get("id"), "who": cmd.get("who")})
 
     def _te(self, ts: float) -> float:
         if not self.timetable.slots:
@@ -94,7 +115,11 @@ class EdgePipeline:
     def process(self, frame: np.ndarray, ts: float) -> dict:
         occupied = self.fsm.state == RoomState.OCCUPIED
         pr = self.counter.update(frame, ts, occupied=occupied)
-        dev_boxes = self.locator(frame) if self.locator is not None else None
+        # Định vị thiết bị mỗi device_stride khung, khung xen giữa dùng lại hộp gần nhất (thiết bị không di chuyển).
+        if self.locator is not None and self._dev_i % max(1, self.cfg.device_stride) == 0:
+            self._dev_boxes = self.locator(frame)
+        self._dev_i += 1
+        dev_boxes = self._dev_boxes
         sensors = self.sensor.latest() if self.sensor is not None else None
         scene = make_scene(frame, pr.boxes, pr.mask, motion=self.motion, device_boxes=dev_boxes, sensors=sensors)
         readings = {k: det.update(frame, scene, ts) for k, det in self.detectors.items()}
@@ -105,6 +130,10 @@ class EdgePipeline:
                 self.fsm.power_w[k] = det.dynamic_power
 
         events = self.fsm.update(ts, pr.n, states)
+        if self.fsm.state == RoomState.OCCUPIED:      # có người vào lại: máy lạnh có thể đã được bật lại
+            for det in self.detectors.values():
+                if getattr(det, "ir_off", False):
+                    det.ir_off = False
         for ev in events:
             d = ev.to_dict()
             d["iso_time"] = datetime.fromtimestamp(ts).isoformat(timespec="seconds")
@@ -128,8 +157,10 @@ class EdgePipeline:
             snap["fps"] = round(self.fps, 1)
         if sensors is not None:
             snap["sensors"] = sensors
-        if self.publisher and ts - self._last_hb >= self.cfg.publisher.heartbeat_seconds:
-            self._last_hb = ts
+        # Gửi ngay khi trạng thái/số người/thiết bị đổi (không chờ nhịp heartbeat) → dashboard sát thời gian thực.
+        key = (snap["state"], snap["people"], tuple(sorted(states.items())))
+        if self.publisher and (key != self._last_key or ts - self._last_hb >= self.cfg.publisher.heartbeat_seconds):
+            self._last_hb, self._last_key = ts, key
             self.publisher.publish_state(snap)
 
         if self.frame_log:

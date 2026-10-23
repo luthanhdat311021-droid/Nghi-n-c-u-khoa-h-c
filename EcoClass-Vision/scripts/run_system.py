@@ -4,6 +4,10 @@
     python scripts/run_system.py --source http://192.168.1.23:8080/video --show
     python scripts/run_system.py --config configs/room_system.yaml --port 8000
 
+Camera Imou: thêm vào .env một dòng (mật khẩu = Safety Code dưới đáy camera, để nguyên dấu "!")
+    IMOU_RTSP=rtsp://admin:<SAFETY_CODE>@192.168.1.12:554/cam/realmonitor?channel=1&subtype=1
+→ chạy không cần --source/--config sẽ tự dùng camera này với configs/room_imou.yaml.
+
 Khởi động 2 tiến trình con:
   1. máy chủ (FastAPI/uvicorn): CSDL, cảnh báo, dashboard
   2. thiết bị biên (scripts/run_edge.py): camera → người/đèn/quạt, ESP32 → nhiệt độ, máy trạng thái 2 phút
@@ -14,14 +18,38 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import subprocess
 import sys
 import threading
 import time
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote, unquote
 
 ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_CONFIG = "configs/room_system.yaml"
+IMOU_CONFIG = "configs/room_imou.yaml"
+
+
+def load_dotenv(path: Path) -> None:
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
+
+def encode_password(url: str) -> str:
+    """rtsp://admin:L2!x@ip/... → mã hoá mật khẩu (! → %21) để FFmpeg đọc đúng; mã sẵn rồi thì giữ nguyên."""
+    m = re.match(r"^(\w+://[^:/@]+:)(.*)@([^@]+)$", url)
+    return f"{m[1]}{quote(unquote(m[2]), safe='')}@{m[3]}" if m else url
+
+
+def hide_password(url: str) -> str:
+    return re.sub(r"//([^:/@]+):[^@]*@", r"//\1:***@", url)
 
 
 class Service:
@@ -78,7 +106,7 @@ def log(msg: str) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--config", default="configs/room_system.yaml")
+    ap.add_argument("--config", help=f"mặc định {DEFAULT_CONFIG} ({IMOU_CONFIG} khi .env có IMOU_RTSP)")
     ap.add_argument("--source", help="ghi đè nguồn camera (vd http://<IP>:8080/video, rtsp://..., 0)")
     ap.add_argument("--flip", choices=["none", "horizontal", "vertical", "both"],
                     help="lật ảnh (mặc định: theo cấu hình với webcam, 'none' với camera IP/điện thoại)")
@@ -93,11 +121,19 @@ def main() -> None:
     log_dir = ROOT / "runs" / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     py = sys.executable
-    edge = [py, "scripts/run_edge.py", "--config", a.config, "--publisher", "http"]
+    load_dotenv(ROOT / ".env")
+    source, config = a.source, a.config
+    imou = os.getenv("IMOU_RTSP")
+    if not source and imou and config in (None, IMOU_CONFIG):
+        source, config = encode_password(imou), IMOU_CONFIG
+        os.environ["ECOCLASS_SOURCE"] = source       # tiến trình edge đọc biến này, mật khẩu không lộ trên dòng lệnh
+        log(f"Camera Imou (từ .env): {hide_password(source)}")
+    config = config or DEFAULT_CONFIG
+    edge = [py, "scripts/run_edge.py", "--config", config, "--publisher", "http"]
     if a.source:
         edge += ["--source", a.source]
     # Webcam laptop cho ảnh kiểu gương (cấu hình lật ngang); camera điện thoại/IP thì không.
-    flip = a.flip or ("none" if a.source and "://" in a.source else None)
+    flip = a.flip or ("none" if source and "://" in source else None)
     if flip:
         edge += ["--flip", flip]
     if a.rotate is not None:

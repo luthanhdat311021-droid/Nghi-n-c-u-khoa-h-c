@@ -1,0 +1,74 @@
+# Camera IP Imou A32 (Ranger 2, IPC-A32EP-L) qua RTSP — luồng phụ 640x352 @ 15 fps.
+# Dựa trên room_system.yaml (30 fps): mọi tham số đếm theo KHUNG đã chia 2 để giữ nguyên thời gian thực tế.
+#
+# Mật khẩu = Safety Code trên tem dưới đáy camera ("!" viết thành %21 trong URL). Không ghi mật khẩu vào file này:
+#   python scripts/run_system.py --config configs/room_imou.yaml --source 'rtsp://admin:<SAFETY_CODE>@192.168.1.12:554/cam/realmonitor?channel=1&subtype=1' --show
+# subtype=1 = luồng phụ (nhẹ); subtype=0 = luồng chính 2304x1296 @ 20 fps (chậm hơn nhiều, không cần vì max_side 640).
+room_id: C204
+source: rtsp://admin:SAFETY_CODE@192.168.1.12:554/cam/realmonitor?channel=1&subtype=1
+fps: 30                         # chỉ là trần lấy mẫu: đặt bằng 15 thì khung RTSP đến lệch nhịp qua WiFi bị bỏ (~8 fps)
+                                # → để cao hơn, tốc độ thực tế = tốc độ camera (~15 fps)
+display_scale: 1.0              # 2.0 (phóng to + làm nét) tốn ~12 ms/khung → --show kéo xuống ~9 fps
+max_side: 640
+# Detector chỉ cho loại quạt trần trong datasets/classroom_videos (scripts/autolabel_ceiling_fans.py, mAP@0.5 0,887):
+# fan_auto chỉ xét dao động bên trong hộp quạt → người, rèm cử động ngoài hộp không bị nhầm là quạt.
+device_model: ../models/ceiling_fan/ceiling_fan_yolo11n.pt
+device_conf: 0.25
+device_stride: 15               # dò hộp quạt 1 lần/giây; chạy mọi khung kéo tốc độ xử lý từ 15 xuống ~10 fps
+tariff_vnd_per_kwh: 2500
+
+person:
+  model: yolo11n-seg.pt
+  imgsz: 640
+  device: "0"
+  half: true
+  stride: 1                     # YOLO chạy mọi khung (15 lần/s) → phát hiện người nhanh nhất
+  conf_occupied: 0.25
+  conf_empty: 0.40
+  hold_seconds: 0.3
+  window: 3                     # trung vị 3 lần chạy YOLO (0,4 s khi stride = 2)
+
+fsm:
+  empty_seconds_to_pending: 1
+  te_seconds: 3                 # trống 3 giây mà còn thiết bị BẬT → CẢNH BÁO (bản chính thức: 120 = 2 phút)
+  te_no_class_seconds: 3
+  off_confirm_seconds: 2        # thiết bị TẮT ổn định 2 s → đóng cảnh báo
+
+sensor:
+  enabled: true
+  port: auto
+  stale_seconds: 10
+
+publisher:
+  mode: http
+  http_url: http://127.0.0.1:8000
+  heartbeat_seconds: 0.5
+  frame_fps: 15
+  frame_width: 640
+
+devices:
+  - id: lights
+    type: light
+    roi: [0.0, 0.0, 1.0, 1.0]
+    # Huấn luyện tiếp từ light_scene_mnv3 trên scene_cls_all + scene_cls_imou (camera Imou nhìn trần, đèn âm trần;
+    # đèn tắt → camera chuyển hồng ngoại). Model gốc không nhận được đèn BẬT trên camera này (acc 0% lớp BẬT).
+    classifier: ../models/imou/light_scene_mnv3.onnx
+    power_w: 72
+    on_frames: 5                # 0,33 s
+    off_frames: 8               # 0,5 s
+    params: {cls_size: [384, 224]}
+  - id: fans
+    type: fan_auto
+    roi: [0.0, 0.0, 1.0, 1.0]
+    power_w: 60
+    on_frames: 15                   # 1 s (cần thấy cánh quay liên tục; ngắn hơn thì người cử động bị nhầm là quạt)
+    off_frames: 24                  # 1,6 s
+    params: {per_fan_w: 60, window: 12, min_frames: 8, tstd_pix: 4.0, heat_alpha: 0.11, heat_on: 0.5,
+             min_area: 0.004, max_aspect: 3.0, reject_bottom_edge: true}
+  - id: ac
+    type: ac_temp
+    roi: [0.0, 0.0, 1.0, 1.0]
+    power_w: 1000
+    on_frames: 30               # 2 s
+    off_frames: 30
+    params: {on_below: 30.0, off_above: 30.5}

@@ -6,6 +6,9 @@ Chủ đề MQTT:
     {prefix}/{room_id}/event   sự kiện (alert, alert_closed, state_change), QoS 1
 Ảnh bằng chứng (đã làm mờ người) được nhúng base64 trong trường ``evidence_jpeg_b64``.
 Không bao giờ gửi video.
+
+Lệnh từ máy chủ (vd tắt máy lạnh): chế độ HTTP nhận kèm trong phản hồi heartbeat (``commands``), mỗi lệnh
+được chuyển cho ``on_command``.
 """
 from __future__ import annotations
 
@@ -14,6 +17,7 @@ import json
 import queue
 import threading
 import time
+from typing import Callable
 
 from ..config import PublisherConfig
 
@@ -23,6 +27,7 @@ class Publisher:
         self.cfg = cfg
         self.room_id = room_id
         self.q: queue.Queue = queue.Queue(maxsize=1000)
+        self.on_command: Callable[[dict], None] | None = None
         self._client = None
         if cfg.mode == "mqtt":
             import paho.mqtt.client as mqtt
@@ -105,6 +110,16 @@ class Publisher:
         elif self.cfg.mode == "http":
             r = session.post(f"{self.cfg.http_url}/api/ingest/{kind}", json=payload, headers=headers, timeout=30)
             r.raise_for_status()
+            if kind == "state" and self.on_command:
+                try:
+                    cmds = r.json().get("commands") or []
+                except ValueError:
+                    cmds = []
+                for c in cmds:
+                    try:
+                        self.on_command(c)
+                    except Exception as e:      # lỗi xử lý lệnh không được làm gửi lại heartbeat
+                        print("[publisher] xử lý lệnh lỗi:", e)
         else:
             topic = f"{self.cfg.topic_prefix}/{self.room_id}/{kind}"
             info = self._client.publish(topic, json.dumps(payload, ensure_ascii=False),

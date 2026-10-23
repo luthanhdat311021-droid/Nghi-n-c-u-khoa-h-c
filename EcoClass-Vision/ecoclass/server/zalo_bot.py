@@ -19,7 +19,7 @@ import requests
 
 API_BASE = "https://bot-api.zaloplatforms.com"
 MAX_TEXT = 2000
-HELP = "Lệnh: /status /alerts /stats /ack <alert_id>"
+HELP = "Lệnh: /status /alerts /stats /ack <alert_id> /tat <phòng> (tắt máy lạnh)"
 
 
 def html_to_text(s: str) -> str:

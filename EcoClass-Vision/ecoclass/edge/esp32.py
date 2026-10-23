@@ -60,6 +60,8 @@ class ESP32Sensor:
         self._last_msg: str | None = None
         self._reading = SensorReading()
         self._lock = threading.Lock()
+        self._ser = None                  # cổng đang mở (để gửi lệnh hồng ngoại xuống mạch)
+        self._wlock = threading.Lock()
         self._stop = threading.Event()
         self._th = threading.Thread(target=self._run, daemon=True, name="esp32")
 
@@ -69,6 +71,20 @@ class ESP32Sensor:
 
     def stop(self) -> None:
         self._stop.set()
+
+    def send_command(self, cmd: str) -> bool:
+        """Gửi một lệnh dòng (vd ``AC_OFF``: mạch phát lệnh tắt máy lạnh của mọi hãng). False nếu chưa kết nối."""
+        ser = self._ser
+        if ser is None or not self.connected:
+            return False
+        try:
+            with self._wlock:
+                ser.write((cmd.strip() + "\n").encode("ascii"))
+                ser.flush()
+            return True
+        except Exception as e:
+            print(f"[esp32] gửi lệnh {cmd} lỗi: {e}")
+            return False
 
     def latest(self, now: float | None = None) -> dict:
         """Kết quả mới nhất; ``ok`` = False khi mất kết nối hoặc số liệu cũ hơn ``stale_seconds``."""
@@ -103,7 +119,7 @@ class ESP32Sensor:
                 self._set_disconnected(f"không mở được {port}: {e}")
                 time.sleep(3)
                 continue
-            self.port, self.connected, self._last_msg = port, True, None
+            self.port, self.connected, self._last_msg, self._ser = port, True, None, ser
             print(f"[esp32] đã kết nối {port}")
             try:
                 while not self._stop.is_set():
@@ -111,11 +127,14 @@ class ESP32Sensor:
                     if not raw:
                         continue
                     line = raw.decode("utf-8", errors="ignore").strip()
+                    if line.startswith("AC_"):            # phản hồi lệnh hồng ngoại (AC_OFF_ALL_START/DONE...)
+                        print(f"[esp32] {line}")
                     with self._lock:
                         self._reading = parse_line(line, self._reading, time.time())
             except Exception as e:                        # rút cáp → SerialException
                 self._set_disconnected(f"mất kết nối {port}: {e}")
             finally:
+                self._ser = None
                 try:
                     ser.close()
                 except Exception:

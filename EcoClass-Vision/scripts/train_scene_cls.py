@@ -5,6 +5,9 @@
 Đánh giá trên các video val (chia theo video, xem build_scene_cls.py): độ chính xác/F1 mức khung và
 mức video (đa số khung). Khi bộ dữ liệu không có val (``--val none`` lúc tạo) → huấn luyện bản cuối
 trên toàn bộ dữ liệu với số epoch cố định.
+Huấn luyện tiếp (fine-tune) từ mô hình đã có trên dữ liệu cũ + dữ liệu mới, ghi ra thư mục RIÊNG:
+    python scripts/train_scene_cls.py --task light --data datasets/scene_cls_all datasets/scene_cls_imou
+        --init models/light_scene_mnv3.pth --lr 2e-4 --out models/imou
 Đầu ra: models/<task>_scene_mnv3.onnx (lớp 0 = off, 1 = on), dùng trong cấu hình thiết bị:
     classifier: ../models/fan_scene_mnv3.onnx
     params: {cls_input: tstack, cls_size: [384, 224]}
@@ -29,7 +32,8 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--task", required=True, choices=["light", "fan"])
     ap.add_argument("--input", choices=["rgb", "tstack"], help="mặc định: light→rgb, fan→tstack")
-    ap.add_argument("--data", default="datasets/scene_cls")
+    ap.add_argument("--data", nargs="+", default=["datasets/scene_cls"], help="một hoặc nhiều thư mục dữ liệu (gộp lại)")
+    ap.add_argument("--init", help="trọng số .pth để huấn luyện tiếp (chỉ đọc); mặc định: ImageNet")
     ap.add_argument("--arch", default="small", choices=["small", "large"])
     ap.add_argument("--epochs", type=int, default=12)
     ap.add_argument("--batch", type=int, default=32)
@@ -40,8 +44,11 @@ def main() -> None:
     inp = a.input or ("rgb" if a.task == "light" else "tstack")
     torch.manual_seed(a.seed)
 
-    root = Path(a.data)
-    rows = list(csv.DictReader(open(root / "index.csv", encoding="utf-8")))
+    rows = []
+    for d in a.data:
+        for r in csv.DictReader(open(Path(d) / "index.csv", encoding="utf-8")):
+            if r.get(a.task, "") != "":           # bỏ mẫu không có nhãn cho thiết bị này
+                rows.append({**r, "root": d})
     tr = [r for r in rows if r["split"] == "train"]
     va = [r for r in rows if r["split"] == "val"]
     dev = "cuda" if torch.cuda.is_available() else "cpu"
@@ -62,7 +69,7 @@ def main() -> None:
 
         def __getitem__(self, i):
             r = self.items[i]
-            img = Image.open(root / inp / r["file"]).convert("RGB")
+            img = Image.open(Path(r["root"]) / inp / r["file"]).convert("RGB")
             return self.tf(img), int(r[a.task])
 
     def build():
@@ -80,6 +87,9 @@ def main() -> None:
     dl_va = DataLoader(DS(va, tf_val), a.batch, num_workers=0) if va else None
 
     model = build()
+    if a.init:
+        model.load_state_dict(torch.load(a.init, map_location=dev))
+        print(f"[train] huấn luyện tiếp từ {a.init}")
     opt = torch.optim.AdamW(model.parameters(), lr=a.lr, weight_decay=1e-4)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, a.lr, total_steps=a.epochs * len(dl_tr), pct_start=0.15)
 

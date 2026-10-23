@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -42,8 +43,9 @@ def main() -> None:
     a = ap.parse_args()
 
     cfg = load_room_config(a.config)
-    if a.source:
-        cfg.source = a.source
+    # ECOCLASS_SOURCE: run_system.py truyền địa chỉ camera có mật khẩu qua biến môi trường (không lộ trên dòng lệnh)
+    if a.source or os.getenv("ECOCLASS_SOURCE"):
+        cfg.source = a.source or os.environ["ECOCLASS_SOURCE"]
     if a.flip:
         cfg.flip = None if a.flip == "none" else a.flip
     if a.rotate is not None:

@@ -161,7 +161,7 @@ function beep() {
 }
 setInterval(() => document.getElementById("clock").textContent = new Date().toLocaleString("vi-VN"), 1000);
 load();
-setInterval(load, 1500);
+setInterval(load, 300);   // máy biên gửi trạng thái ngay khi đổi → hỏi dày để thẻ phòng sát thời gian thực
 </script>
 </body>
 </html>

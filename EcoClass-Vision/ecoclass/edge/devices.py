@@ -557,7 +557,12 @@ class TempACDetector(DeviceDetector):
     ``off_above`` (mặc định = on_below + 0,5) tạo vùng trễ để nhiệt độ dao động quanh ngưỡng không
     làm trạng thái lật liên tục. Mất cảm biến → UNKNOWN (không tính là BẬT, không gây cảnh báo giả).
     Không dùng camera nên bỏ qua ROI và che khuất.
+
+    ``ir_off``: hệ thống vừa phát lệnh tắt bằng hồng ngoại → coi là TẮT ngay (phòng còn lạnh một lúc mới ấm
+    lên quá ngưỡng). Hết hiệu lực khi nhiệt độ tự vượt ``off_above`` hoặc có người vào phòng (pipeline xoá).
     """
+
+    ir_off = False
 
     def update(self, frame, scene, ts):
         s = scene.sensors or {}
@@ -566,7 +571,11 @@ class TempACDetector(DeviceDetector):
             return DeviceReading(self.state, UNKNOWN, 0.0, {"sensor_ok": False})
         on_below = float(self.p.get("on_below", 30.0))
         off_above = float(self.p.get("off_above", on_below + 0.5))
-        if t < on_below:
+        if self.ir_off and t >= off_above:
+            self.ir_off = False
+        if self.ir_off:
+            raw = OFF
+        elif t < on_below:
             raw = ON
         elif t >= off_above:
             raw = OFF

@@ -13,6 +13,7 @@ import asyncio
 import base64
 import html
 import time
+import uuid
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
@@ -42,6 +43,8 @@ OFFLINE_SECONDS = 30.0             # quá lâu không nhận heartbeat → thi�
 _last_sensor_log: dict[str, float] = {}
 _frames: dict[str, tuple[bytes, float]] = {}   # room_id → (JPEG mới nhất, thời điểm nhận)
 _te: dict[str, float] = {}                      # room_id → thời gian chờ cảnh báo (s) mà máy biên đang dùng
+_commands: dict[str, list[dict]] = {}           # room_id → lệnh chờ gửi xuống máy biên (kèm phản hồi heartbeat)
+_ac_cmd: dict[str, dict] = {}                   # room_id → lệnh tắt máy lạnh gần nhất {status, who, time}
 
 
 def duration_vi(seconds: float) -> str:
@@ -89,8 +92,43 @@ def handle_state(p: dict) -> None:
         s.commit()
 
 
+def request_ac_off(room_id: str, who: str) -> str:
+    """Xếp lệnh tắt máy lạnh cho phòng; máy biên nhận ở heartbeat kế tiếp (≤ 0,5 s) và cho ESP32 phát hồng ngoại."""
+    room_id = room_id.strip()
+    with SessionLocal() as s:
+        rooms = s.scalars(select(Room).order_by(Room.room_id)).all()
+    now = datetime.now()
+    online = [r.room_id for r in rooms if r.last_seen and (now - r.last_seen).total_seconds() <= OFFLINE_SECONDS]
+    if not room_id:
+        if len(online) != 1:
+            return "Ghi rõ phòng: /tat <phòng>" + (f" (đang chạy: {', '.join(online)})" if online else "")
+        room_id = online[0]
+    match = next((r for r in rooms if r.room_id.lower() == room_id.lower()), None)
+    if match is None:
+        return f"Không có phòng {room_id}."
+    if match.room_id not in online:
+        return f"Phòng {match.room_id} đang mất kết nối, không gửi được lệnh tắt máy lạnh."
+    _commands.setdefault(match.room_id, []).append({"type": "ac_off", "id": uuid.uuid4().hex[:8], "who": who})
+    _ac_cmd[match.room_id] = {"status": "pending", "who": who, "time": now.isoformat(timespec="seconds")}
+    print(f"[ac] {who} yêu cầu tắt máy lạnh phòng {match.room_id}")
+    return f"Đang gửi lệnh tắt máy lạnh phòng {match.room_id} (mạch phát tín hiệu của mọi hãng và đời máy, ~1 phút)."
+
+
 def handle_event(p: dict) -> None:
     jpeg_b64 = p.pop("evidence_jpeg_b64", None)
+    if p["type"] == "ac_command":                    # máy biên báo kết quả lệnh tắt máy lạnh
+        ok = p.get("reason") == "sent"
+        _ac_cmd[p["room_id"]] = {"status": "sent" if ok else "failed", "who": p.get("who"),
+                                 "time": _dt(p["ts"]).isoformat(timespec="seconds")}
+        with SessionLocal() as s:
+            s.add(Event(room_id=p["room_id"], type="ac_command", time=_dt(p["ts"]), state_to=p["state_to"],
+                        reason=f"{p.get('reason')} ({p.get('who')})"[:64]))
+            s.commit()
+        msg = (f"📡 <b>{html.escape(p['room_id'])}</b>: mạch đã phát lệnh tắt máy lạnh." if ok else
+               f"❌ <b>{html.escape(p['room_id'])}</b>: không tắt được máy lạnh — ESP32 chưa kết nối.")
+        zalo.send_text(msg)
+        bot.send_text(msg)
+        return
     when = _dt(p["ts"])
     with SessionLocal() as s:
         room = s.get(Room, p["room_id"]) or Room(room_id=p["room_id"])
@@ -178,7 +216,8 @@ def _notify_alert(a: Alert) -> bool:
     caption = (f"⚠️ <b>Phòng {html.escape(a.room_id)} bị bỏ quên thiết bị điện</b>\n"
                f"Thời điểm: {a.started:%H:%M %d/%m/%Y}\nThiết bị đang bật: {html.escape(devices)} (~{kw:.2f} kW)\n{temp}"
                f"Không có người trong {duration_vi(a.empty_seconds)}. {ctx}\n"
-               f"Xác nhận: /ack {a.alert_id}")
+               + (f"👉 Tắt máy lạnh: gửi /tat {html.escape(a.room_id)}\n" if "ac" in (a.devices_on or []) else "")
+               + f"Xác nhận: /ack {a.alert_id}")
     zalo_ok = zalo.send_text(caption)              # Zalo: chỉ gửi chữ (ảnh bằng chứng cần URL công khai)
     print(f"[notify] {datetime.now():%H:%M:%S.%f}"[:-3] + f" {a.alert_id} zalo={'đã gửi' if zalo_ok else 'không gửi'}")
     jpeg = Path(a.evidence_path).read_bytes() if a.evidence_path and Path(a.evidence_path).exists() else None
@@ -222,7 +261,12 @@ def _cmd_ack(arg: str, cid: str) -> str:
     return ack_alert(arg, cid if cid.startswith("zalo:") else f"telegram:{cid}")
 
 
-COMMANDS = {"status": _cmd_status, "alerts": _cmd_alerts, "stats": _cmd_stats, "ack": _cmd_ack, "start": _cmd_status}
+def _cmd_tat(arg: str, cid: str) -> str:
+    return request_ac_off(arg, cid if cid.startswith("zalo:") else f"telegram:{cid}")
+
+
+COMMANDS = {"status": _cmd_status, "alerts": _cmd_alerts, "stats": _cmd_stats, "ack": _cmd_ack, "start": _cmd_status,
+            "tat": _cmd_tat}
 bot = TelegramBot(settings.telegram_token, settings.telegram_chat_ids, COMMANDS)
 zalo = ZaloBot(settings.zalo_token, settings.zalo_chat_ids, COMMANDS, api_base=settings.zalo_api_base)
 
@@ -241,7 +285,7 @@ def _startup() -> None:
 @app.post("/api/ingest/state", dependencies=[Depends(check_key)])
 def ingest_state(p: dict):
     handle_state(p)
-    return {"ok": True}
+    return {"ok": True, "commands": _commands.pop(p["room_id"], [])}
 
 
 @app.post("/api/ingest/event", dependencies=[Depends(check_key)])
@@ -297,7 +341,13 @@ def rooms():
         "online": bool(r.last_seen and (now - r.last_seen).total_seconds() <= OFFLINE_SECONDS),
         "sensors": r.sensors, "fps": r.fps, "open_alert": open_alerts.get(r.room_id),
         "has_frame": r.room_id in _frames and time.time() - _frames[r.room_id][1] <= OFFLINE_SECONDS,
+        "ac_cmd": _ac_cmd.get(r.room_id),
     } for r in rows]
+
+
+@app.post("/api/rooms/{room_id}/ac_off")
+def ac_off(room_id: str, who: str = "dashboard"):
+    return {"message": request_ac_off(room_id, who)}
 
 
 @app.get("/api/sensors")

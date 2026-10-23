@@ -85,6 +85,7 @@ class RoomConfig:
     max_side: int | None = None          # thu nhỏ ảnh để cạnh dài <= max_side (vd 640) ngay khi thu nhận
     device_model: str | None = None      # YOLO đã huấn luyện (lớp light, fan) để định vị thiết bị
     device_conf: float = 0.25
+    device_stride: int = 1               # chạy YOLO định vị thiết bị mỗi N khung (camera cố định → vị trí ít đổi)
     timetable: str | None = None
     tariff_vnd_per_kwh: float = 2500.0
     person: PersonConfig = field(default_factory=PersonConfig)
@@ -128,6 +129,7 @@ def load_room_config(path: str | Path) -> RoomConfig:
         max_side=raw.get("max_side"),
         device_model=raw.get("device_model"),
         device_conf=float(raw.get("device_conf", 0.25)),
+        device_stride=int(raw.get("device_stride", 1)),
         timetable=raw.get("timetable"),
         tariff_vnd_per_kwh=float(raw.get("tariff_vnd_per_kwh", 2500.0)),
         person=PersonConfig(**raw.get("person", {})),

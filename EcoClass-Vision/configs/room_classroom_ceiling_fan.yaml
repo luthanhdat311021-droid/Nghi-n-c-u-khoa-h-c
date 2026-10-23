@@ -1,0 +1,47 @@
+# Như room_classroom_rules.yaml nhưng bộ định vị thiết bị là detector CHỈ học loại quạt trần trong các video
+# (models/ceiling_fan, sinh nhãn bằng scripts/autolabel_ceiling_fans.py) → fan_auto chỉ xét dao động trong box quạt trần.
+# Video val (không dùng khi huấn luyện detector): r1_172, r1_211, r2_224, r2_239.
+#   python scripts/eval_videos.py --config configs/room_classroom_ceiling_fan.yaml
+#   python scripts/eval_videos.py --config configs/room_classroom_ceiling_fan.yaml --only r1_172 r1_211 r2_224 r2_239
+room_id: CLASSROOM
+source: datasets/classroom_videos/room1/r1_154.mp4
+fps: 10
+device_model: ../models/ceiling_fan/ceiling_fan_yolo11n.pt
+device_conf: 0.25
+tariff_vnd_per_kwh: 2500
+
+person:
+  model: yolo11n-seg.pt
+  imgsz: 640
+  device: "0"
+  conf_occupied: 0.25
+  conf_empty: 0.40
+  hold_seconds: 2
+  window: 7
+
+fsm:
+  empty_seconds_to_pending: 2
+  te_seconds: 15
+  te_no_class_seconds: 15
+  off_confirm_seconds: 3
+
+publisher:
+  mode: none
+
+devices:
+  - id: lights
+    type: lights_auto
+    roi: [0.0, 0.0, 1.0, 1.0]
+    power_w: 72
+    on_frames: 4
+    off_frames: 10
+    params: {per_light_w: 20, v_min: 240, core_v: 250, core_min: 0.6, min_area: 0.0008, max_area: 0.06,
+             fill_min: 0.4, s_mean_max: 12, max_neighbors: 0}
+  - id: fans
+    type: fan_auto
+    roi: [0.0, 0.0, 1.0, 1.0]
+    power_w: 60
+    on_frames: 4
+    off_frames: 16
+    params: {per_fan_w: 60, window: 8, min_frames: 5, tstd_pix: 4.0, heat_alpha: 0.15, heat_on: 0.5,
+             min_area: 0.004, max_aspect: 3.0}
